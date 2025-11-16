@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 # --- Paths (adjust as needed) ---
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA = PROJECT_ROOT / "data" / "tracking"
-IMG1 = DATA / "left01.jpg"
-IMG2 = DATA / "left02.jpg"
+IMG1 = DATA / "left02.jpg"
+IMG2 = DATA / "left04.jpg"
 SAVE_HERE = PROJECT_ROOT / "outputs" / "tracking" / "RANSAC"
 
 
