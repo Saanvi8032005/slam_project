@@ -14,6 +14,7 @@ DATA_DIR = PROJECT_ROOT / "data" / "tracking"
 IMG1 = DATA_DIR / "left03.jpg"
 IMG2 = DATA_DIR / "left04.jpg"
 output_dir = PROJECT_ROOT / "outputs" / "tracking"
+pose_estimation_output = PROJECT_ROOT / "outputs" / "pose_estimation"
 os.makedirs(output_dir, exist_ok=True)
 
 
@@ -145,6 +146,14 @@ def matching(matcher="flann", filter_method="none"):
         good = ransac_filter(kp1, kp2, good)
     elif filter_method == "none":
         print("[FILTER] None applied")
+
+    # for pose estimation later
+    pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
+    pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
+
+    matches_path = pose_estimation_output / "matches_left03_left04.npz"
+    np.savez(matches_path, pts1=pts1, pts2=pts2)
+    print(f"[SAVE] Saved {len(pts1)} matches to {matches_path}")
 
     # Visualise
     vis = cv.drawMatches(
