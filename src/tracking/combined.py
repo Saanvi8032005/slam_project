@@ -119,7 +119,8 @@ def ransac_filter(kp1, kp2, matches):
 # -----------------------------------------------------------
 # MATCHING PIPELINE WITH FILTER
 # -----------------------------------------------------------
-def matching(matcher="flann", filter_method="none"):
+def matching(matcher="flann", filter_method="none", save_npz=False,
+             return_data=False):
     msg = (
         f"\n=== Running with MATCHER={matcher.upper()} | "
         f"FILTER={filter_method.upper()} ==="
@@ -151,9 +152,10 @@ def matching(matcher="flann", filter_method="none"):
     pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
 
-    matches_path = pose_estimation_output / "matches_left03_left04.npz"
-    np.savez(matches_path, pts1=pts1, pts2=pts2)
-    print(f"[SAVE] Saved {len(pts1)} matches to {matches_path}")
+    if save_npz:
+        matches_path = pose_estimation_output / "matches_left03_left04.npz"
+        np.savez(matches_path, pts1=pts1, pts2=pts2)
+        print(f"[SAVE] Saved {len(pts1)} matches to {matches_path}")
 
     # Visualise
     vis = cv.drawMatches(
@@ -171,6 +173,8 @@ def matching(matcher="flann", filter_method="none"):
     plt.savefig(save_path, dpi=160)
     """
     plt.show()
+    if return_data:
+        return pts1, pts2, kp1, kp2, good
 
 
 # -----------------------------------------------------------
