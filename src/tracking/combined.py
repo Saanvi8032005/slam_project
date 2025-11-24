@@ -123,9 +123,6 @@ def ransac_filter(kp1, kp2, matches):
 def matching(matcher="flann",
              filter_method="none",
              save_npz=True,
-             img1_path=im1,
-             img2_path=im2,
-             matches_out_name=f"matches_{name}.npz",
              return_data=True):
     msg = (
         f"\n=== Running with MATCHER={matcher.upper()} | "
@@ -158,7 +155,7 @@ def matching(matcher="flann",
     pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
     if save_npz:
-        matches_path = pose_estimation_output / f"matches_{name}.npz"
+        matches_path = pose_estimation_output / "matches.npz"
         np.savez(matches_path, pts1=pts1, pts2=pts2)
         print(f"[SAVE] Saved {len(pts1)} matches to {matches_path}")
 

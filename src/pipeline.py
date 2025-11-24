@@ -19,6 +19,7 @@ from visualising.visualising import visualize_points
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 POSE_OUT_DIR = PROJECT_ROOT / "outputs"
+DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
 
 
 def stage_tracking():
