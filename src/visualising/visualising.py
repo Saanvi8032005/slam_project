@@ -6,7 +6,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = PROJECT_ROOT / "outputs" / "visualising"
+OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
 
 
 def visualize_points(points_file="points_left03_left04.npy"):

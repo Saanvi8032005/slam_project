@@ -11,11 +11,12 @@ import os
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "tracking"
-IMG1 = DATA_DIR / "left03.jpg"
-IMG2 = DATA_DIR / "left04.jpg"
+IMG1 = DATA_DIR / "img1.png"
+IMG2 = DATA_DIR / "img2.png"
 output_dir = PROJECT_ROOT / "outputs" / "tracking"
 pose_estimation_output = PROJECT_ROOT / "outputs" / "pose_estimation"
 os.makedirs(output_dir, exist_ok=True)
+os.makedirs(pose_estimation_output, exist_ok=True)
 
 
 # -----------------------------------------------------------
@@ -119,8 +120,8 @@ def ransac_filter(kp1, kp2, matches):
 # -----------------------------------------------------------
 # MATCHING PIPELINE WITH FILTER
 # -----------------------------------------------------------
-def matching(matcher="flann", filter_method="none", save_npz=False,
-             return_data=False):
+def matching(matcher="flann", filter_method="none", save_npz=True,
+             return_data=True):
     msg = (
         f"\n=== Running with MATCHER={matcher.upper()} | "
         f"FILTER={filter_method.upper()} ==="
@@ -136,7 +137,7 @@ def matching(matcher="flann", filter_method="none", save_npz=False,
     knn = match_descriptors(des1, des2, method=matcher)
 
     # Ratio test
-    ratio = 0.75
+    ratio = 0.8   # was 0.75
     good = [m for m, n in knn if m.distance < ratio * n.distance]
     print(f"[RATIO] {len(good)} matches")
 

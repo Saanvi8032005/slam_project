@@ -15,6 +15,7 @@ from pathlib import Path
 from tracking.combined import matching
 from pose_estimation.pose_estimation import pose_estimate
 from triangulation.triangulation import triangulate_from_files
+from visualising.visualising import visualize_points
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 POSE_OUT_DIR = PROJECT_ROOT / "outputs"
@@ -50,11 +51,17 @@ def stage_triangulate():
     triangulate_from_files()
 
 
+def stage_visualise():
+    print("\n=== STAGE 4: VISUALISATION ===")
+    visualize_points()
+
+
 if __name__ == "__main__":
     # Set these to True/False depending on what you want to run.
     RUN_TRACKING = True
     RUN_POSE = True
     RUN_TRIANGULATE = True
+    RUN_VISUALISE = True
 
     if RUN_TRACKING:
         stage_tracking()
@@ -64,3 +71,6 @@ if __name__ == "__main__":
 
     if RUN_TRIANGULATE:
         stage_triangulate()
+
+    if RUN_VISUALISE:
+        stage_visualise()

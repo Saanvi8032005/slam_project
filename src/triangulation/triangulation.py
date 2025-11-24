@@ -5,7 +5,7 @@ import cv2 as cv
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = PROJECT_ROOT / "outputs" / "triangulation"
+OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
 
 
 def triangulate_from_files(
