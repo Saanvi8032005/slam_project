@@ -8,9 +8,9 @@ import matplotlib.pyplot as plt
 import os
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "tracking"
-IMG1 = DATA_DIR / "left03.jpg"
-IMG2 = DATA_DIR / "left04.jpg"
+DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
+IMG1 = DATA_DIR / "1305031452.791720.png"
+IMG2 = DATA_DIR / "1305031452.823674.png"
 output_dir = PROJECT_ROOT / "outputs" / "tracking"
 os.makedirs(output_dir, exist_ok=True)
 
@@ -86,6 +86,7 @@ def matching(method="flann"):
     plt.title(f"ORB + {method.upper()} good matches")
     plt.axis('off')
     plt.show()
+    print("IMAGE SHAPE:", im1.shape, im2.shape)
 
 
 if __name__ == "__main__":

@@ -9,8 +9,8 @@ OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
 
 
 def triangulate_from_files(
-    matches_file="matches_left03_left04.npz",
-    pose_file="pose_left03_left04.npz"
+    matches_file="matches.npz",
+    pose_file="pose.npz"
 ):
     """
     Stage 3: Triangulate 3D points using:
@@ -48,7 +48,7 @@ def triangulate_from_files(
 
     # === 5. Save 3D points ===
 
-    pts_path = OUTPUT_DIR / "points_left03_left04.npy"
+    pts_path = OUTPUT_DIR / "points.npy"
     np.save(pts_path, pts3D)
     print(f"[TRI] Saved 3D points to {pts_path}")
 

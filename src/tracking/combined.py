@@ -6,7 +6,7 @@ with optional histogram or RANSAC filtering.
 import cv2 as cv
 import numpy as np
 from pathlib import Path
-import matplotlib.pyplot as plt
+#   import matplotlib.pyplot as plt
 import os
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -122,8 +122,10 @@ def ransac_filter(kp1, kp2, matches):
 # -----------------------------------------------------------
 def matching(matcher="flann",
              filter_method="none",
+             img1_path=None,
+             img2_path=None,
              save_npz=True,
-             return_data=True):
+             return_data=False):
     msg = (
         f"\n=== Running with MATCHER={matcher.upper()} | "
         f"FILTER={filter_method.upper()} ==="
@@ -131,8 +133,11 @@ def matching(matcher="flann",
     print(msg)
 
     # Load images
-    im1 = cv.imread(str(IMG1), cv.IMREAD_GRAYSCALE)
-    im2 = cv.imread(str(IMG2), cv.IMREAD_GRAYSCALE)
+    im1 = cv.imread(str(img1_path), cv.IMREAD_GRAYSCALE)
+    im2 = cv.imread(str(img2_path), cv.IMREAD_GRAYSCALE)
+
+    if im1 is None or im2 is None:
+        raise ValueError(f"Could not load images: {img1_path}, {img2_path}")
 
     kp1, des1, kp2, des2 = compute_orb_features(im1, im2)
 
@@ -160,21 +165,25 @@ def matching(matcher="flann",
         print(f"[SAVE] Saved {len(pts1)} matches to {matches_path}")
 
     # Visualise
+
+    """
     vis = cv.drawMatches(
         im1, kp1, im2, kp2,
         sorted(good, key=lambda x: x.distance)[:80],
         None,
         flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
     )
-
     plt.imshow(vis, cmap='gray')
     plt.title(f"{matcher.upper()} + {filter_method.upper()}")
     plt.axis('off')
-    """
+
+
     save_path = output_dir / f"matches_{matcher}_{filter_method}.jpg"
     plt.savefig(save_path, dpi=160)
-    """
+
     plt.show()
+    """
+
     if return_data:
         return pts1, pts2, kp1, kp2, good
 

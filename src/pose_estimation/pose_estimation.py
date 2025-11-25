@@ -31,7 +31,7 @@ def load_calibration(calib_path):
     return K, dist
 
 
-def pose_estimate(matches_file="matches_left03_left04.npz"):
+def pose_estimate(matches_file="matches.npz"):
     data = np.load(OUTPUT_DIR / matches_file)
     pts1 = data["pts1"]
     pts2 = data["pts2"]
@@ -54,7 +54,7 @@ def pose_estimate(matches_file="matches_left03_left04.npz"):
     print("[POSE] Translation t^T\n", t.T)
 
     #   NEW: save pose + intrinsics for triangulation stage
-    pose_path = OUTPUT_DIR / "pose_left03_left04.npz"
+    pose_path = OUTPUT_DIR / "pose.npz"
     np.savez(pose_path, R=R, t=t, K=K)
     print(f"[POSE] Saved pose to {pose_path}")
 

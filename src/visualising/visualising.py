@@ -6,10 +6,10 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
+OUTPUT_DIR = PROJECT_ROOT / "outputs" / "visualising"
 
 
-def visualize_points(points_file="points_left03_left04.npy"):
+def visualize_points(points_file="points.npy"):
     pts_path = OUTPUT_DIR / points_file
     pts3D = np.load(pts_path)
     print(f"[VIS] Loaded {pts3D.shape[0]} 3D points from {pts_path}")
@@ -25,7 +25,7 @@ def visualize_points(points_file="points_left03_left04.npy"):
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
-    ax.set_title("Triangulated 3D Points (left03–left04)")
+    ax.set_title("Triangulated 3D Points")
 
     # roughly equal axis scaling
     max_range = max(xs.max() - xs.min(),
