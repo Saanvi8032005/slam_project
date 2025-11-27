@@ -20,7 +20,7 @@ from aligning_pc.aligning_pc import align_point_clouds
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 POSE_OUT_DIR = PROJECT_ROOT / "outputs"
-DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
+DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 
 
 def load_image_files():
@@ -49,6 +49,7 @@ def stage_tracking(img1, img2):
              img1_path=img1,
              img2_path=img2,
              save_npz=True,
+             unit_test=False,
              return_data=False,
              )
     matches_file = "matches.npz"
@@ -98,7 +99,7 @@ if __name__ == "__main__":
     pose_files = []
     point_files = []
     #   for i in range(len(image_files) - 1):
-    for i in range(len(image_files) - 1):
+    for i in range(2):
         img1 = image_files[i]
         img2 = image_files[i + 1]
         pair_id = f"{i:03d}"

@@ -6,13 +6,13 @@ with optional histogram or RANSAC filtering.
 import cv2 as cv
 import numpy as np
 from pathlib import Path
-#   import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import os
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data" / "tracking"
-IMG1 = DATA_DIR / "img1.png"
-IMG2 = DATA_DIR / "img2.png"
+DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
+IMG1 = DATA_DIR / "1305031452.791720.png"
+IMG2 = DATA_DIR / "1305031452.823674.png"
 output_dir = PROJECT_ROOT / "outputs" / "tracking"
 pose_estimation_output = PROJECT_ROOT / "outputs" / "pose_estimation"
 os.makedirs(output_dir, exist_ok=True)
@@ -125,6 +125,7 @@ def matching(matcher="flann",
              img1_path=None,
              img2_path=None,
              save_npz=True,
+             unit_test=False,
              return_data=False):
     msg = (
         f"\n=== Running with MATCHER={matcher.upper()} | "
@@ -164,25 +165,22 @@ def matching(matcher="flann",
         np.savez(matches_path, pts1=pts1, pts2=pts2)
         print(f"[SAVE] Saved {len(pts1)} matches to {matches_path}")
 
-    # Visualise
+    if unit_test:
+        # Visualise
+        vis = cv.drawMatches(
+            im1, kp1, im2, kp2,
+            sorted(good, key=lambda x: x.distance)[:80],
+            None,
+            flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+        )
+        plt.imshow(vis, cmap='gray')
+        plt.title(f"{matcher.upper()} + {filter_method.upper()}")
+        plt.axis('off')
 
-    """
-    vis = cv.drawMatches(
-        im1, kp1, im2, kp2,
-        sorted(good, key=lambda x: x.distance)[:80],
-        None,
-        flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
-    )
-    plt.imshow(vis, cmap='gray')
-    plt.title(f"{matcher.upper()} + {filter_method.upper()}")
-    plt.axis('off')
+        save_path = output_dir / f"matches_{matcher}_{filter_method}.jpg"
+        plt.savefig(save_path, dpi=160)
 
-
-    save_path = output_dir / f"matches_{matcher}_{filter_method}.jpg"
-    plt.savefig(save_path, dpi=160)
-
-    plt.show()
-    """
+        plt.show()
 
     if return_data:
         return pts1, pts2, kp1, kp2, good
