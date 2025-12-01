@@ -10,11 +10,13 @@ import matplotlib.pyplot as plt
 import os
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
-IMG1 = DATA_DIR / "1305031452.791720.png"
-IMG2 = DATA_DIR / "1305031452.823674.png"
+DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
+
+# IMG1 = DATA_DIR / "1305031452.791720.png"
+IMG1 = DATA_DIR / "1305031452.823674.png"
+IMG2 = DATA_DIR / "1305031452.859642.png"
 output_dir = PROJECT_ROOT / "outputs" / "tracking"
-pose_estimation_output = PROJECT_ROOT / "outputs" / "pose_estimation"
+
 os.makedirs(output_dir, exist_ok=True)
 os.makedirs(pose_estimation_output, exist_ok=True)
 
@@ -124,9 +126,10 @@ def matching(matcher="flann",
              filter_method="none",
              img1_path=None,
              img2_path=None,
-             save_npz=True,
+             save_npz=None,
              unit_test=False,
-             return_data=False):
+             return_data=None,
+             out_name=None):
     msg = (
         f"\n=== Running with MATCHER={matcher.upper()} | "
         f"FILTER={filter_method.upper()} ==="
@@ -161,7 +164,9 @@ def matching(matcher="flann",
     pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
     if save_npz:
-        matches_path = pose_estimation_output / "matches.npz"
+        filename = out_name if out_name is not None else "matches.npz"
+        matches_path = TEMP_DIR / filename
+        #   matches_path = pose_estimation_output / "matches.npz"
         np.savez(matches_path, pts1=pts1, pts2=pts2)
         print(f"[SAVE] Saved {len(pts1)} matches to {matches_path}")
 

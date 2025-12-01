@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = PROJECT_ROOT / "outputs" / "visualising"
 
 
-def visualize_points(points_file="points.npy"):
+def visualize_points(points_file="global_points.npy"):
     pts_path = OUTPUT_DIR / points_file
     pts3D = np.load(pts_path)
     print(f"[VIS] Loaded {pts3D.shape[0]} 3D points from {pts_path}")

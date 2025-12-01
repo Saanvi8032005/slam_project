@@ -5,6 +5,7 @@ import re
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
+TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
 CALIB_DIR = PROJECT_ROOT / "outputs" / "calibration"
 CALIB_FILE = CALIB_DIR / "calibration_results.txt"
 
@@ -31,7 +32,9 @@ def load_calibration(calib_path):
     return K, dist
 
 
-def pose_estimate(matches_file="matches.npz"):
+def pose_estimate(
+        matches_file="matches.npz",
+        out_name=None):
     data = np.load(OUTPUT_DIR / matches_file)
     pts1 = data["pts1"]
     pts2 = data["pts2"]
@@ -54,7 +57,7 @@ def pose_estimate(matches_file="matches.npz"):
     print("[POSE] Translation t^T\n", t.T)
 
     #   NEW: save pose + intrinsics for triangulation stage
-    pose_path = OUTPUT_DIR / "pose.npz"
+    pose_path = TEMP_DIR / out_name if out_name else TEMP_DIR / "pose.npz"
     np.savez(pose_path, R=R, t=t, K=K)
     print(f"[POSE] Saved pose to {pose_path}")
 
