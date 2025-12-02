@@ -1,22 +1,52 @@
+"""
+Estimate relative pose (R, t) between two views from matched points.
+
+Parameters
+----------
+pts1, pts2 : (N, 2) float32
+    Matched pixel coordinates (x, y) in image 1 and image 2.
+K : (3, 3) float32, optional
+    Camera intrinsic matrix. If None, loaded from CALIB_FILE.
+dist : (5,) or (N,) float32, optional
+    Distortion coefficients (currently not used explicitly; you should
+    ideally undistort points before passing them here).
+
+Returns
+-------
+R : (3, 3) float64
+    Rotation from camera 1 to camera 2.
+t : (3, 1) float64
+    Unit translation direction (scale is unknown in monocular case).
+K : (3, 3) float32
+    Intrinsic matrix used.
+maskPose : (N,) uint8
+    Inlier mask returned by recoverPose (1 = inlier).
+"""
+
 import numpy as np
 import cv2 as cv
 from pathlib import Path
-import re
+#   import re
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
-TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
+
 CALIB_DIR = PROJECT_ROOT / "outputs" / "calibration"
 CALIB_FILE = CALIB_DIR / "calibration_results.txt"
+OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
 
 
-def load_calibration(calib_path):
-    """Reads camera matrix and distortion coefficients from a text file."""
+#   check notation of () below pls
+"""
+    def load_calibration(calib_path: Path = CALIB_FILE):
+    Reads camera matrix and distortion coefficients from a text file.
     with open(calib_path, "r") as f:
         text = f.read()
 
     # --- Extract the 3x3 camera matrix ---
     mtx_str = re.findall(r"\[\[(.*?)\]\]", text, re.S)[0]
+    if not mtx_str:
+        raise ValueError("Could not find camera matrix in calibration file")
+
     rows = mtx_str.strip().split("\n")
     K = np.array([
         [float(n) for n in row.replace("[", "").replace("]", "").split()]
@@ -28,19 +58,45 @@ def load_calibration(calib_path):
         r"Distortion coefficients \(dist\):\s*\[(.*?)\]", text, re.S
     )[0]
     dist = np.array([float(x) for x in dist_str.split()], dtype=np.float32)
+    if not dist:
+        raise ValueError("Could not find distortion
+        coefficients in calibration file")
 
+    return K, dist
+    """
+
+
+def load_calibration():
+    K = np.array([
+        [517.3,   0.0, 318.6],
+        [0.0, 516.5, 255.3],
+        [0.0,   0.0,   1.0]
+    ], dtype=np.float32)
+
+    dist = np.array([
+        -0.29426946,
+        0.12324915,
+        0.00113851,
+        -0.00013802,
+        0.01020549
+    ], dtype=np.float32)
     return K, dist
 
 
-def pose_estimate(
-        matches_file="matches.npz",
-        out_name=None):
-    data = np.load(OUTPUT_DIR / matches_file)
-    pts1 = data["pts1"]
-    pts2 = data["pts2"]
-    print(f"[POSE] Loaded {pts1.shape[0]} matches")
+def pose_estimate(pts1, pts2):
 
-    K, dist = load_calibration(CALIB_FILE)
+    print(f"[POSE] Loaded {pts1.shape[0]} matches")
+    K, dist = load_calibration()
+
+    if pts1.shape[0] == 0 or pts2.shape[0] == 0:
+        raise ValueError("[POSE] No points provided for pose estimation")
+    if pts1.shape != pts2.shape or pts1.shape[1] != 2:
+        raise ValueError(f"[POSE] Expected pts1, pts2 of shape (N, 2), got {
+            pts1.shape}, {pts2.shape}")
+    if K is None:
+        K, dist_loaded = load_calibration()
+        if dist is None:
+            dist = dist_loaded
 
     E, maskE = cv.findEssentialMat(
         pts1, pts2, K,
@@ -56,12 +112,14 @@ def pose_estimate(
     print("[POSE] Rotation R:\n", R)
     print("[POSE] Translation t^T\n", t.T)
 
-    #   NEW: save pose + intrinsics for triangulation stage
-    pose_path = TEMP_DIR / out_name if out_name else TEMP_DIR / "pose.npz"
-    np.savez(pose_path, R=R, t=t, K=K)
-    print(f"[POSE] Saved pose to {pose_path}")
+    save_file = False
+    if save_file:
+        #   NEW: save pose + intrinsics for triangulation stage
+        pose_path = OUTPUT_DIR / "pose.npz"
+        np.savez(pose_path, R=R, t=t, K=K)
+        print(f"[POSE] Saved pose to {pose_path}")
 
-    return R, t, K
+    return R, t, K, maskPose
 
 
 if __name__ == "__main__":

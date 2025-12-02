@@ -1,73 +1,84 @@
+"""
+Build a global point cloud by chaining camera poses and transforming
+each per-pair point cloud.
+
+pose_results: dict
+    e.g. {
+        "000": {"R": R0, "t": t0, "K": K, "mask": mask0},
+        "001": {"R": R1, "t": t1, "K": K, "mask": mask1},
+        ...
+    }
+points_results: dict
+    e.g. {
+        "000": {"points": pts3D_0, ...},
+        "001": {"points": pts3D_1, ...},
+        ...
+    }
+"""
 import numpy as np
 from pathlib import Path
+import os
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-POSE_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
-SAVE_HERE = PROJECT_ROOT / "outputs" / "visualising"
+testing_dir = PROJECT_ROOT / "outputs" / "aligning_pc"
+os.makedirs(testing_dir, exist_ok=True)
 
 
-def load_pose(pose_file):
-    """Load R, t, K from a saved pose file."""
-    data = np.load(POSE_DIR / pose_file)
-    return data["R"], data["t"], data["K"]
-
-
-def load_points(points_file):
-    """Load triangulated 3D points"""
-    return np.load(POSE_DIR / points_file)
-
-
-def align_point_clouds(pose_files,
-                       point_files,
+def align_point_clouds(pose_results: dict,
+                       points_results: dict,
                        output_name="global_points.npy",
-                       save=True
+                       save=None
                        ):
-    """
-    Build a global point cloud by chaining poses and transforming each cloud.
-    pose_files: list of pose file names (pose_000.npz, pose_001.npz, ...)
-    point_files: list of corresponding points files (points_000.npy, ...)
-    """
 
-    global_points = []
+    pair_ids = sorted(pose_results.keys())      #   check again
 
-    T_world = np.eye(4)  # start world frame = first camera
-    T_prev = T_world
+    # 2) Compute camera poses C_k in world frame
+    #    C_0 = I, then C_{k+1} = C_k * T_k
+    camera_poses = []  # list of 4x4 matrices, one per camera
+    C = np.eye(4)      # world = camera 0 frame
+    camera_poses.append(C)
 
-    for pose_file, points_file in zip(pose_files, point_files):
-        R, t, K = load_pose(pose_file)
-        R = R.reshape(3, 3)
-        t = t.reshape(3, 1)
+    for pid in pair_ids:
+        R = pose_results[pid]["R"].reshape(3, 3)
+        t = pose_results[pid]["t"].reshape(3, 1)
 
-        # Build 4x4 transform
         T = np.eye(4)
         T[:3, :3] = R
         T[:3, 3:] = t
 
-        # Chain transforms
-        T_world = T_prev @ T
-        T_prev = T_world
+        C = C @ T          # pose of next camera
+        camera_poses.append(C)
 
-        # Load 3D points
-        P = load_points(points_file)
-        P_h = np.hstack([P, np.ones((P.shape[0], 1))])  # homogeneous
+    # camera_poses[k] = pose of camera k in world frame
+    # pair "000" uses camera 0, pair "001" uses camera 1, etc.
 
-        # Transform into world frame
-        P_w = (T_world @ P_h.T).T[:, :3]
+    # 3) Transform each per-pair point cloud into world frame
+    global_points_list = []
 
-        global_points.append(P_w)
+    for idx, pid in enumerate(pair_ids):
+        pts_local = points_results[pid]["points"]  # (N, 3)
+        if pts_local.size == 0:
+            continue
 
-    # Merge into one cloud
-    global_points = np.vstack(global_points)
+        # pair i → points are in camera i frame
+        C_i = camera_poses[idx]  # 4x4
+
+        P_h = np.hstack([pts_local, np.ones((pts_local.shape[0], 1))])  # (N, 4)
+        P_w = (C_i @ P_h.T).T[:, :3]  # (N, 3)
+        global_points_list.append(P_w)
+
+    if not global_points_list:
+        print("[ALIGN] No points to merge")
+        return np.empty((0, 3))
+
+    global_points = np.vstack(global_points_list)
 
     # Save
     if save:
-        out_path = SAVE_HERE / output_name
+        out_path = testing_dir / output_name
         np.save(out_path, global_points)
         print(f"[ALIGN] Saved global point cloud: {out_path}")
-
-    # ---------------------------------------------------------
-    # TEMPORARY DEBUG: Visualise each cloud in a different colour
-    # ---------------------------------------------------------
     try:
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
@@ -75,48 +86,44 @@ def align_point_clouds(pose_files,
         fig = plt.figure(figsize=(8, 6))
         ax = fig.add_subplot(111, projection='3d')
 
-        # reload each individual cloud for plotting
         colours = ['red', 'blue', 'green', 'orange', 'purple', 'cyan']
 
-        for idx, (pose_file, points_file) in enumerate(zip(
-                pose_files, point_files)
-                ):
-            P = load_points(points_file)
-            P_h = np.hstack([P, np.ones((P.shape[0], 1))])
-            # Apply the same chaining as before for correct position
-            R, t, _ = load_pose(pose_file)
-            R = R.reshape(3, 3)
-            t = t.reshape(3, 1)
+        # Global clipping radius based on all points
+        d_all = np.linalg.norm(global_points, axis=1)
+        r = np.percentile(d_all, 98)
+        print(f"[ALIGN] Global debug radius (98th percentile): {r:.2f}")
 
-            T = np.eye(4)
-            T[:3, :3] = R
-            T[:3, 3:] = t
+        # Plot each cloud separately with same clipping
+        for idx, pid in enumerate(pair_ids):
+            pts_local = points_results[pid]["points"]
+            if pts_local.size == 0:
+                continue
 
-            # chain transform again (debug mode only)
-            if idx == 0:
-                T_world_debug = np.eye(4)
-            else:
-                T_world_debug = T_world_debug @ T
+            C_i = camera_poses[idx]
+            P_h = np.hstack([pts_local, np.ones((pts_local.shape[0], 1))])
+            P_w = (C_i @ P_h.T).T[:, :3]
 
-            P_w_debug = (T_world_debug @ P_h.T).T[:, :3]
+            d = np.linalg.norm(P_w, axis=1)
+            P_plot = P_w[d < r]
 
             ax.scatter(
-                P_w_debug[:, 0],
-                P_w_debug[:, 1],
-                P_w_debug[:, 2],
+                P_plot[:, 0],
+                P_plot[:, 1],
+                P_plot[:, 2],
                 s=4,
                 c=colours[idx % len(colours)],
-                label=f"Cloud {idx}"
+                label=f"Cloud {pid}",
             )
 
-        ax.legend()
+        ax.set_xlim(-r, r)
+        ax.set_ylim(-r, r)
+        ax.set_zlim(-r, r)
         ax.set_title("DEBUG: Point clouds per frame (different colours)")
+        ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0))
+        plt.tight_layout()
         plt.show()
 
     except Exception as e:
         print("[DEBUG VIS ERROR]", e)
-    # ---------------------------------------------------------
-    # END DEBUG
-    # ---------------------------------------------------------
 
     return global_points

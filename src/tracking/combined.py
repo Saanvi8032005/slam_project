@@ -15,10 +15,9 @@ DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 # IMG1 = DATA_DIR / "1305031452.791720.png"
 IMG1 = DATA_DIR / "1305031452.823674.png"
 IMG2 = DATA_DIR / "1305031452.859642.png"
-output_dir = PROJECT_ROOT / "outputs" / "tracking"
 
+output_dir = PROJECT_ROOT / "outputs" / "tracking"
 os.makedirs(output_dir, exist_ok=True)
-os.makedirs(pose_estimation_output, exist_ok=True)
 
 
 # -----------------------------------------------------------
@@ -56,6 +55,10 @@ def match_with_bf(des1, des2):
 
 
 def match_descriptors(des1, des2, method="flann"):
+    if des1 is None or des2 is None:
+        print("[MATCH] No descriptors in one of the images")
+        return []
+
     if method == "flann":
         try:
             return match_with_flann(des1, des2)
@@ -87,7 +90,7 @@ def histogram_filter(kp1, kp2, matches, tol_deg=15.0, bins=36):
 
     angle_diff = np.abs((angles - peak_angle + 180) % 360 - 180)
     mask = angle_diff < tol_deg
-    filtered = [m for m, k in zip(matches, mask) if k]
+    filtered = [m for m, keep in zip(matches, mask) if keep]
 
     print(f"[HIST] kept {len(filtered)} / {len(matches)}")
     return filtered
@@ -105,7 +108,9 @@ def ransac_filter(kp1, kp2, matches):
     pts2 = np.float32([kp2[m.trainIdx].pt for m in matches])
 
     F, mask = cv.findFundamentalMat(
-        pts1, pts2, cv.FM_RANSAC,
+        pts1,
+        pts2,
+        cv.FM_RANSAC,
         ransacReprojThreshold=1.0,
         confidence=0.999
     )
@@ -127,9 +132,24 @@ def matching(matcher="flann",
              img1_path=None,
              img2_path=None,
              save_npz=None,
-             unit_test=False,
+             unit_test=None,
              return_data=None,
              out_name=None):
+    """
+    Runs feature extraction, matching, and optional filtering.
+
+    Returns
+    -------
+    pts1 : (N, 2) float32
+        Matched points in image 1.
+    pts2 : (N, 2) float32
+        Matched points in image 2.
+    kp1, kp2 : list[cv.KeyPoint]
+        Keypoints for each image.
+    matches : list[cv.DMatch]
+        Final filtered matches (indices refer to kp1/kp2).
+    """
+
     msg = (
         f"\n=== Running with MATCHER={matcher.upper()} | "
         f"FILTER={filter_method.upper()} ==="
@@ -146,6 +166,16 @@ def matching(matcher="flann",
     kp1, des1, kp2, des2 = compute_orb_features(im1, im2)
 
     knn = match_descriptors(des1, des2, method=matcher)
+    # is this needed? do i need if good is empty too
+    if len(knn) == 0:
+        print("[MATCH] No matches found")
+        return (
+            np.empty((0, 2), np.float32),
+            np.empty((0, 2), np.float32),
+            kp1,
+            kp2,
+            [],
+        )
 
     # Ratio test
     ratio = 0.8   # was 0.75
@@ -159,16 +189,22 @@ def matching(matcher="flann",
         good = ransac_filter(kp1, kp2, good)
     elif filter_method == "none":
         print("[FILTER] None applied")
+    else:
+        raise ValueError(f"Unknown filter method: {filter_method}")
+
+    if len(good) == 0:
+        print("[MATCH] No matches after filtering")
+        return (
+            np.empty((0, 2), np.float32),
+            np.empty((0, 2), np.float32),
+            kp1,
+            kp2,
+            [],
+        )
 
     # for pose estimation later
     pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
-    if save_npz:
-        filename = out_name if out_name is not None else "matches.npz"
-        matches_path = TEMP_DIR / filename
-        #   matches_path = pose_estimation_output / "matches.npz"
-        np.savez(matches_path, pts1=pts1, pts2=pts2)
-        print(f"[SAVE] Saved {len(pts1)} matches to {matches_path}")
 
     if unit_test:
         # Visualise
@@ -181,10 +217,9 @@ def matching(matcher="flann",
         plt.imshow(vis, cmap='gray')
         plt.title(f"{matcher.upper()} + {filter_method.upper()}")
         plt.axis('off')
-
-        save_path = output_dir / f"matches_{matcher}_{filter_method}.jpg"
-        plt.savefig(save_path, dpi=160)
-
+        if save_npz:
+            save_path = output_dir / f"matches_{matcher}_{filter_method}.jpg"
+            plt.savefig(save_path, dpi=160)
         plt.show()
 
     if return_data:
@@ -200,4 +235,13 @@ if __name__ == "__main__":
     MATCHER = "flann"        # "flann" or "bf"
     FILTER = "hist"          # "none", "hist", "ransac"
 
-    matching(matcher=MATCHER, filter_method=FILTER)
+    matching(
+        matcher=MATCHER,
+        filter_method=FILTER,
+        img1_path=IMG1,
+        img2_path=IMG2,
+        save_npz=True,
+        unit_test=True,
+        return_data=False,
+        out_name=None,
+    )

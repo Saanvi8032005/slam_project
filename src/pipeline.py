@@ -14,7 +14,7 @@ from pathlib import Path
 #   project/src/pose_estimation/pose_estimation.py
 from tracking.combined import matching
 from pose_estimation.pose_estimation import pose_estimate
-from triangulation.triangulation import triangulate_from_files
+from triangulation.triangulation import triangulate_from_data
 from visualising.visualising import visualize_points
 from aligning_pc.aligning_pc import align_point_clouds
 
@@ -35,7 +35,7 @@ def load_image_files():
     return image_files
 
 
-def stage_tracking(img1, img2, pair_id):
+def stage_tracking(img1, img2, pair_id, tracking_results):
     """
     Stage 1: run feature detection + matching + filtering.
     Writes pts1, pts2 to an .npz file for pose_estimation to use.
@@ -46,72 +46,97 @@ def stage_tracking(img1, img2, pair_id):
     print(f"\n=== STAGE 1: TRACKING / MATCHING ({pair_id}) ===")
 
     out_file = f"matches_{pair_id}.npz"
-    matching(matcher=MATCHER,
+    pts1, pts2, kp1, kp2, matches = matching(
+             matcher=MATCHER,
              filter_method=FILTER,
              img1_path=img1,
              img2_path=img2,
-             save_npz=True,
+             save_npz=False,
              unit_test=False,
-             return_data=False,
+             return_data=True,
              out_name=out_file,
              )
-    matches_file = TEMP_DIR / out_file
-    return matches_file
+    entry = {
+        "pair_id": pair_id,
+        "img1": img1,
+        "img2": img2,
+        "pts1": pts1,
+        "pts2": pts2,
+        "kp1": kp1,
+        "kp2": kp2,
+        "matches": matches,
+    }
+    tracking_results[pair_id] = entry
+
+    return entry
 
 
-def stage_pose(matches_file, pair_id):
-    """
-    Stage 2: run pose estimation + triangulation
-    using the matches saved by stage_tracking().
-    pose_estimate() is assumed to:
-      - load outputs/pose_estimation/matches.npz
-      - compute R, t, K
-      - save them to outputs/temp/pose.npz
+def stage_pose(tracking_entry, pose_store=None):
+    pair_id = tracking_entry["pair_id"]
+    pts1 = tracking_entry["pts1"]
+    pts2 = tracking_entry["pts2"]
 
-    This is then immediately read pose.npz into memory.
-    """
     print(f"\n=== STAGE 2: POSE ESTIMATION ({pair_id})===")
+    R, t, K, maskPose = pose_estimate(pts1, pts2)
 
-    out_file = TEMP_DIR / f"pose_{pair_id}.npz"
+    if pose_store is not None:
+        pose_store[pair_id] = {
+            "pair_id": pair_id,
+            "R": R,
+            "t": t,
+            "K": K,
+            "mask": maskPose,
+        }
+    return R, t, K, maskPose
 
-    pose_estimate(
-        matches_file=str(matches_file),
-        out_name=str(out_file)
-    )
 
-    pose_path = TEMP_DIR / f"pose_{pair_id}.npz"
-    #   data = np.load(pose_path)
+def stage_triangulate(tracking_entry, pose_entry, points_store=None):
     """
-    R = data["R"]
-    t = data["t"]
-    K = data["K"]"""
-    print(f"[PIPE] Loaded pose from {pose_path}")
-    return pose_path
+    Stage 3: Triangulation from in-memory pts + pose.
 
-
-def stage_triangulate(matches_file, pose_file, pair_id):
+    tracking_entry: dict from tracking_results[pair_id]
+    pose_entry:     dict from pose_results[pair_id]
+    points_store:   optional dict to accumulate 3D points per pair
+    """
     print("\n=== STAGE 3: TRIANGULATION ===")
 
-    out_file = TEMP_DIR / f"points_{pair_id}.npy"
-    triangulate_from_files(matches_file=str(matches_file),
-                           pose_file=str(pose_file),
-                           out_file=str(out_file)
-                           )
-    points_file = out_file
-    return points_file
+    pair_id = tracking_entry["pair_id"]
+
+    pts1 = tracking_entry["pts1"]
+    pts2 = tracking_entry["pts2"]
+    R = pose_entry["R"]
+    t = pose_entry["t"]
+    K = pose_entry["K"]
+    mask = pose_entry.get("mask", None)
+
+    pts3D = triangulate_from_data(
+        pts1,
+        pts2,
+        R,
+        t,
+        K,
+        mask=mask,
+        out_name=f"points_{pair_id}.npy",
+    )
+    if pts3D.shape[0] == 0:
+        print(f"[PIPE] Skipping pair {pair_id} due to empty triangulation")
+    if points_store is not None:
+        points_store[pair_id] = {
+            "pair_id": pair_id,
+            "points": pts3D,
+        }
+    return pts3D
 
 
-def stage_align_pc(pose_files, points_files):
+def stage_align_pc(pose_results, points_results):
     print("\n=== STAGE 4: ALIGNING POINT CLOUDS ===")
 
-    global_out = TEMP_DIR / "global_points.npy"
-    align_point_clouds(
-        pose_files=[str(p) for p in pose_files],
-        point_files=[str(p) for p in points_files],
-        output_name=str(global_out),
-        save=True
+    global_points = align_point_clouds(
+        pose_results,
+        points_results,
+        output_name="global_points.npy",
+        save=False,
     )
-    return global_out
 
 
 def stage_visualise(points_file):
@@ -122,21 +147,26 @@ def stage_visualise(points_file):
 if __name__ == "__main__":
 
     image_files = load_image_files()
-    pose_files = []
-    point_files = []
-    #   for i in range(len(image_files) - 1):
+    tracking_results = {}
+    pose_results = {}
+    points_results = {}
+
+    #   (len(image_files) - 1):
     for i in range(len(image_files) - 1):
+        print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         pair_id = f"{i:03d}"
         img1 = image_files[i]
         img2 = image_files[i + 1]
 
-        matches_file = stage_tracking(img1, img2, pair_id)
-        pose_file = stage_pose(matches_file, pair_id)
-        points_file = stage_triangulate(matches_file, pose_file, pair_id)
+        tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
 
-        pose_files.append(pose_file)
-        point_files.append(points_file)
+        R, t, K, maskPose = stage_pose(tracking_entry, pose_results)   # << stores dict entry   
+        pose_entry = pose_results[pair_id]
 
-    global_points_file = stage_align_pc(pose_files, point_files)
+        pts3D = stage_triangulate(tracking_entry,
+                                  pose_entry,
+                                  points_store=points_results)
+
+    stage_align_pc(pose_results, points_results)
     #   stage_visualise(global_points_file)
     print("\n[PIPE] Done processing all image pairs.")
