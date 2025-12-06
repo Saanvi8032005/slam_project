@@ -7,12 +7,14 @@ Third script to run the individual stages in order:
 """
 
 from pathlib import Path
+import numpy as np
 
 # Adjust these imports to match your actual package structure.
 # Example assumes:
 #   project/src/tracking/combined.py
 #   project/src/pose_estimation/pose_estimation.py
 from tracking.combined import matching
+from tracking.lsd import lsd
 from pose_estimation.pose_estimation import pose_estimate
 from triangulation.triangulation import triangulate_from_data
 from visualising.visualising import visualize_points
@@ -56,12 +58,24 @@ def stage_tracking(img1, img2, pair_id, tracking_results):
              return_data=True,
              out_name=out_file,
              )
+    pts1_line, pts2_line = lsd(img1, img2)
+    #   pts1_all = np.vstack([pts1, pts1_line])
+    #   pts2_all = np.vstack([pts2, pts2_line])
+    pts1_all = np.vstack([
+        np.float32(pts1).reshape(-1, 2),
+        np.float32(pts1_line).reshape(-1, 2)
+    ])
+
+    pts2_all = np.vstack([
+        np.float32(pts2).reshape(-1, 2),
+        np.float32(pts2_line).reshape(-1, 2)
+    ])
     entry = {
         "pair_id": pair_id,
         "img1": img1,
         "img2": img2,
-        "pts1": pts1,
-        "pts2": pts2,
+        "pts1": pts1_all,
+        "pts2": pts2_all,
         "kp1": kp1,
         "kp2": kp2,
         "matches": matches,
@@ -131,7 +145,7 @@ def stage_triangulate(tracking_entry, pose_entry, points_store=None):
 def stage_align_pc(pose_results, points_results):
     print("\n=== STAGE 4: ALIGNING POINT CLOUDS ===")
 
-    global_points = align_point_clouds(
+    align_point_clouds(
         pose_results,
         points_results,
         output_name="global_points.npy",
@@ -152,15 +166,14 @@ if __name__ == "__main__":
     points_results = {}
 
     #   (len(image_files) - 1):
-    for i in range(len(image_files) - 1):
+    for i in range(2):
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         pair_id = f"{i:03d}"
         img1 = image_files[i]
         img2 = image_files[i + 1]
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
-
-        R, t, K, maskPose = stage_pose(tracking_entry, pose_results)   # << stores dict entry   
+        R, t, K, maskPose = stage_pose(tracking_entry, pose_results)
         pose_entry = pose_results[pair_id]
 
         pts3D = stage_triangulate(tracking_entry,

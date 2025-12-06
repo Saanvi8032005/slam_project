@@ -206,9 +206,10 @@ def matching(matcher="flann",
     pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
 
-    use_lk = False
+    use_lk = True
     if use_lk:
-        print("[LK] Refining matches using Lucas–Kanade optical flow")
+        print("[LK] Filtering matches using Lucas–Kanade optical flow")
+
         lk_params = dict(
             winSize=(21, 21),
             maxLevel=3,
@@ -216,28 +217,49 @@ def matching(matcher="flann",
         )
 
         # LK expects shape (N,1,2)
-        pts1_lk = pts1.reshape(-1, 1, 2)
-        pts2_lk, st, err = cv.calcOpticalFlowPyrLK(
-            im1, im2, pts1_lk, None, **lk_params
+        pts1_fwd = pts1.reshape(-1, 1, 2)
+
+        # Forward: im1 -> im2
+        pts2_fwd, st1, err1 = cv.calcOpticalFlowPyrLK(
+            im1, im2, pts1_fwd, None, **lk_params
         )
 
-        st = st.reshape(-1)
-        valid_mask = st == 1
+        # Backward: im2 -> im1
+        pts1_back, st2, err2 = cv.calcOpticalFlowPyrLK(
+            im2, im1, pts2_fwd, None, **lk_params
+        )
 
-        # Keep only successfully tracked points
-        pts1_refined = pts1[valid_mask]
-        pts2_refined = pts2_lk.reshape(-1, 2)[valid_mask]
+        st1 = st1.reshape(-1)
+        st2 = st2.reshape(-1)
+        pts2_fwd_flat = pts2_fwd.reshape(-1, 2)
+        pts1_back_flat = pts1_back.reshape(-1, 2)
+        err1 = err1.reshape(-1)
+        err2 = err2.reshape(-1)
 
-        # Also shrink the match list so indices still correspond
-        good = [m for m, keep in zip(good, valid_mask) if keep]
+        # Forward–backward error (how far we drift if we go 1->2->1)
+        fb_err = np.linalg.norm(pts1_back_flat - pts1, axis=1)
 
-        print(f"[LK] Valid tracks after LK: {pts1_refined.shape[0]} / {pts1.shape[0]}")
-        if len(pts1_refined) != len(pts1):
-            print('CHANGE--------------------------------------------------------------------------------------------------------------')
-        pts1, pts2 = pts1_refined, pts2_refined
+        # Thresholds (you can tune these)
+        fb_thresh = 1.0    # max allowed FB error in pixels
+        err_thresh = 50.0  # max allowed LK photometric error
+        max_disp = 25.0    # optional: reject crazy jumps vs descriptor match
 
-        if pts1.shape[0] == 0:
-            print("[LK] No valid tracks after LK refinement")
+        disp = np.linalg.norm(pts2_fwd_flat - pts2, axis=1)
+
+        valid = (
+            (st1 == 1)
+            & (st2 == 1)
+            & (fb_err < fb_thresh)
+            & (err1 < err_thresh)
+            & (err2 < err_thresh)
+            & (disp < max_disp)
+        )
+
+        print(f"[LK] Valid after FB + error check: {
+            valid.sum()} / {len(valid)}")
+
+        if valid.sum() == 0:
+            print("[LK] No valid tracks after LK filtering")
             return (
                 np.empty((0, 2), np.float32),
                 np.empty((0, 2), np.float32),
@@ -245,6 +267,11 @@ def matching(matcher="flann",
                 kp2,
                 [],
             )
+
+        # Filter points and matches
+        pts1 = pts1[valid]
+        pts2 = pts2_fwd_flat[valid]
+        good = [m for m, keep in zip(good, valid) if keep]
 
     if unit_test:
         # Visualise
