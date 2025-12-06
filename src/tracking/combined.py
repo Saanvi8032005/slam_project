@@ -206,6 +206,46 @@ def matching(matcher="flann",
     pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
 
+    use_lk = False
+    if use_lk:
+        print("[LK] Refining matches using Lucas–Kanade optical flow")
+        lk_params = dict(
+            winSize=(21, 21),
+            maxLevel=3,
+            criteria=(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 30, 0.01),
+        )
+
+        # LK expects shape (N,1,2)
+        pts1_lk = pts1.reshape(-1, 1, 2)
+        pts2_lk, st, err = cv.calcOpticalFlowPyrLK(
+            im1, im2, pts1_lk, None, **lk_params
+        )
+
+        st = st.reshape(-1)
+        valid_mask = st == 1
+
+        # Keep only successfully tracked points
+        pts1_refined = pts1[valid_mask]
+        pts2_refined = pts2_lk.reshape(-1, 2)[valid_mask]
+
+        # Also shrink the match list so indices still correspond
+        good = [m for m, keep in zip(good, valid_mask) if keep]
+
+        print(f"[LK] Valid tracks after LK: {pts1_refined.shape[0]} / {pts1.shape[0]}")
+        if len(pts1_refined) != len(pts1):
+            print('CHANGE--------------------------------------------------------------------------------------------------------------')
+        pts1, pts2 = pts1_refined, pts2_refined
+
+        if pts1.shape[0] == 0:
+            print("[LK] No valid tracks after LK refinement")
+            return (
+                np.empty((0, 2), np.float32),
+                np.empty((0, 2), np.float32),
+                kp1,
+                kp2,
+                [],
+            )
+
     if unit_test:
         # Visualise
         vis = cv.drawMatches(
