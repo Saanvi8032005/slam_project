@@ -90,6 +90,31 @@ def rotation_error_deg(R_est, R_gt):
     return np.degrees(angle)
 
 
+def translation_direction_error_deg(t_est, t_gt):
+    """
+    Compute translation direction error in degrees.
+    Handles the t vs -t sign ambiguity by taking the min of the two.
+    """
+
+    # Flatten & normalise both
+    t_est = t_est.reshape(3)
+    t_gt = t_gt.reshape(3)
+
+    t_est = t_est / np.linalg.norm(t_est)
+    t_gt = t_gt / np.linalg.norm(t_gt)
+
+    # Angle between t_est and +t_gt
+    dot1 = np.clip(np.dot(t_est, t_gt), -1.0, 1.0)
+    angle1 = np.degrees(np.arccos(dot1))
+
+    # Angle between t_est and -t_gt
+    dot2 = np.clip(np.dot(t_est, -t_gt), -1.0, 1.0)
+    angle2 = np.degrees(np.arccos(dot2))
+
+    # Take the geometrically valid one
+    return min(angle1, angle2)
+
+
 def direction_error_deg(t_est, t_gt):
     te = t_est.reshape(3)
     tg = t_gt.reshape(3)
@@ -140,6 +165,7 @@ if __name__ == "__main__":
                 return_data=True,
                 out_name=None,
                 )
+        """      
         pts1_line, pts2_line = lsd(img1_path, img2_path)
         pts1 = np.vstack([
             np.float32(pts1).reshape(-1, 2),
@@ -149,12 +175,13 @@ if __name__ == "__main__":
             np.float32(pts2).reshape(-1, 2),
             np.float32(pts2_line).reshape(-1, 2)
         ])
+        """
         R_est, t_est, K, maskPose = pose_estimate(pts1, pts2)
 
         R_gt, t_gt = relative_pose_from_gt(GT_PATH, ts1, ts2)
 
         rot_err = rotation_error_deg(R_est, R_gt)
-        dir_err = direction_error_deg(t_est, t_gt)
+        dir_err = translation_direction_error_deg(t_est, t_gt)
 
         # --- store result in dictionary ---
         key = f"{img1_path.name} -> {img2_path.name}"
