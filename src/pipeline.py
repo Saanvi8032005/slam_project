@@ -13,8 +13,8 @@ import numpy as np
 # Example assumes:
 #   project/src/tracking/combined.py
 #   project/src/pose_estimation/pose_estimation.py
-from tracking.combined import matching
-from tracking.lsd import lsd
+from tracking.tracking import matching
+from tracking.lsd_tracking import lsd
 from pose_estimation.pose_estimation import pose_estimate
 from triangulation.triangulation import triangulate_from_data
 from visualising.visualising import visualize_points
@@ -166,8 +166,11 @@ if __name__ == "__main__":
     points_results = {}
 
     #   (len(image_files) - 1):
-    for i in range(2):
+    for i in range(3):
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
+        print(f"[PIPE] Image 1: {image_files[i]}")
+        print(f"[PIPE] Image 2: {image_files[i + 1]}")
+
         pair_id = f"{i:03d}"
         img1 = image_files[i]
         img2 = image_files[i + 1]

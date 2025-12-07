@@ -84,21 +84,27 @@ def load_calibration():
 
 
 def pose_estimate(pts1, pts2):
+    # Ensure proper type
+    pts1 = np.asarray(pts1, dtype=np.float32)
+    pts2 = np.asarray(pts2, dtype=np.float32)
 
     print(f"[POSE] Loaded {pts1.shape[0]} matches")
     K, dist = load_calibration()
 
+    #   pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
+    #   pts2 = cv.undistortPoints(pts2.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
+
     if pts1.shape[0] == 0 or pts2.shape[0] == 0:
         raise ValueError("[POSE] No points provided for pose estimation")
     if pts1.shape != pts2.shape or pts1.shape[1] != 2:
-        raise ValueError(f"[POSE] Expected pts1, pts2 of shape (N, 2), got {
-            pts1.shape}, {pts2.shape}")
+        raise ValueError(f"[POSE] Expected pts1, pts2 of shape (N, 2), got {pts1.shape}, {pts2.shape}")
+
     if K is None:
         K, dist_loaded = load_calibration()
         if dist is None:
             dist = dist_loaded
 
-    E, maskE = cv.findEssentialMat(
+    E, maskE = cv.findEssentialMat(      #   maskE unused
         pts1, pts2, K,
         method=cv.RANSAC,
         prob=0.999,
@@ -107,7 +113,7 @@ def pose_estimate(pts1, pts2):
     if E is None:
         raise RuntimeError("Essential matrix estimation failed")
 
-    _, R, t, maskPose = cv.recoverPose(E, pts1, pts2, K)
+    n_inliers, R, t, maskPose = cv.recoverPose(E, pts1, pts2, K)
 
     print("[POSE] Rotation R:\n", R)
     print("[POSE] Translation t^T\n", t.T)
@@ -119,8 +125,21 @@ def pose_estimate(pts1, pts2):
         np.savez(pose_path, R=R, t=t, K=K)
         print(f"[POSE] Saved pose to {pose_path}")
 
+    mask = maskPose.ravel().astype(bool)
+    inlier_ratio = mask.mean()  # inliers / total
+    num_inliers = mask.sum()
+
+    # Flagging bad poses, was 0.05
+    if num_inliers < 30 or inlier_ratio < 0.1:
+        print("[POSE][WARN] Very few inliers – pose may be unreliable")
+
+    print("[POSE] Rotation R:\n", R)
+    print("[POSE] Translation t^T\n", t.T)
+    print(f"[POSE] Inliers: {num_inliers}/{len(mask)} ({inlier_ratio:.2f})")
+
     return R, t, K, maskPose
 
 
 if __name__ == "__main__":
-    pose_estimate("matches_left03_left04.npz")
+    #   pose_estimate("matches_left03_left04.npz")
+    print('Run from pipeline.py')
