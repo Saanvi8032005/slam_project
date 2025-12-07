@@ -24,73 +24,28 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 testing_dir = PROJECT_ROOT / "outputs" / "triangulation"
 
 
-def triangulate(
-    pts1: np.ndarray,
-    pts2: np.ndarray,
-    R: np.ndarray,
-    t: np.ndarray,
-    K: np.ndarray,
-    mask: np.ndarray | None = None,     # notation confusing
-    out_name: str | None = None
-):
-    # === 1. Load matches ===
-    pts1 = np.asarray(pts1, dtype=np.float32)
-    pts2 = np.asarray(pts2, dtype=np.float32)
-    R = np.asarray(R, dtype=np.float64).reshape(3, 3)
-    t = np.asarray(t, dtype=np.float64).reshape(3, 1)
-    K = np.asarray(K, dtype=np.float64).reshape(3, 3)
+def reprojection_error(pts3D, pts_img, R, t, K):
+    """
+    pts3D: (N,3) triangulated points (in cam1 frame or world frame
+    consistent with R,t)
+    pts_img: (N,2) original 2D points in that camera
+    R, t, K: pose + intrinsics for that camera
+    """
+    pts3D = np.asarray(pts3D, dtype=np.float64)
+    pts_img = np.asarray(pts_img, dtype=np.float64)
 
-    if pts1.shape[0] == 0 or pts2.shape[0] == 0:
-        raise ValueError("[TRI] No points provided")
+    if pts3D.shape[0] == 0:
+        return np.array([])
 
-    if pts1.shape != pts2.shape or pts1.shape[1] != 2:
-        raise ValueError(f"[TRI] Expected pts1, pts2 of shape (N, 2), got {
-            pts1.shape}, {pts2.shape}")
+    P = K @ np.hstack((R, t))      # 3x4
+    X_h = np.hstack([pts3D, np.ones((pts3D.shape[0], 1))]).T  # 4xN
 
-    #   when is mask none
-    if mask is not None:
-        mask = np.asarray(mask).ravel().astype(bool)
-        pts1 = pts1[mask]
-        pts2 = pts2[mask]
-        print(f"[TRI] Using {pts1.shape[0]} inliers after pose mask")
+    proj = P @ X_h                 # 3xN
+    proj = proj[:2] / proj[2:]     # 2xN
+    proj = proj.T                  # Nx2
 
-    print(f"[TRI] Loaded {pts1.shape[0]} matches")
-
-    # === 3. Build projection matrices ===
-    P1 = K @ np.hstack((np.eye(3), np.zeros((3, 1))))
-    P2 = K @ np.hstack((R, t))
-
-    # === 4. Triangulate ===
-    pts4D = cv.triangulatePoints(P1, P2, pts1.T, pts2.T)
-
-    w = pts4D[3, :]
-    good_w = np.abs(w) > 1e-6               # oddly specific
-    pts4D = pts4D[:, good_w]
-
-    pts3D = (pts4D[:3] / pts4D[3]).T
-
-    # --- Simple geometric filtering: keep points in front of camera ---
-    z = pts3D[:, 2]
-    mask_z = (z > 0) & (z < 5e4)   # tweak upper bound if needed
-    pts3D = pts3D[mask_z]
-
-    # Remove extreme distance outliers (e.g. top 2% by radius)
-    d = np.linalg.norm(pts3D, axis=1)
-    r98 = np.percentile(d, 98)
-    pts3D = pts3D[d < r98]
-
-    print(f"[TRI] Triangulated {pts3D.shape[0]} 3D points")
-
-    # === 5. Save 3D points ===
-    save_file = False
-    if save_file:
-        out_name = f"points_{out_name}.npy"
-        out_path = testing_dir / out_name
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        np.save(out_path, pts3D)
-        print(f"[TRI] Saved 3D points to {out_path}")
-
-    return pts3D
+    err = np.linalg.norm(proj - pts_img, axis=1)  # per-point pixel error
+    return err
 
 
 def triangulate_from_data(
@@ -99,7 +54,7 @@ def triangulate_from_data(
     R,
     t,
     K,
-    mask=None,
+    mask: np.ndarray | None = None,
     save_file: bool = False,
     out_name: str | None = None,
 ):
@@ -118,7 +73,8 @@ def triangulate_from_data(
         Intrinsic matrix.
     mask : (N, 1) or (N,), optional
         Inlier mask from recoverPose / findEssentialMat. If provided,
-        we *prefer* inliers, but fall back to all points if it kills everything.
+        we *prefer* inliers, but fall back to all points if it kills
+        everything.
     """
 
     pts1 = np.asarray(pts1, dtype=np.float32)
@@ -129,7 +85,8 @@ def triangulate_from_data(
 
     # --- Basic sanity ---
     if pts1.shape != pts2.shape or pts1.shape[1] != 2:
-        raise ValueError(f"[TRI] Expected pts1, pts2 of shape (N, 2), got {pts1.shape}, {pts2.shape}")
+        raise ValueError(f"[TRI] Expected pts1, pts2 of shape (N, 2), got {
+            pts1.shape}, {pts2.shape}")
 
     print(f"[TRI] Initial correspondences: {pts1.shape[0]}")
 
@@ -162,37 +119,45 @@ def triangulate_from_data(
     pts2_T = pts2.T
 
     pts4D = cv.triangulatePoints(P1, P2, pts1_T, pts2_T)  # (4, N)
-
     w = pts4D[3, :]
-    good_w = np.abs(w) > 1e-6
-    if not np.any(good_w):
+
+    # Handle near-zero w (points at infinity / numeric junk), CHECK ME
+    mask_w = np.abs(w) > 1e-6
+    if not np.any(mask_w):
         print("[TRI] All points had near-zero w; returning empty point cloud")
         return np.empty((0, 3), dtype=np.float32)
 
-    pts4D = pts4D[:, good_w]
-    pts3D = (pts4D[:3] / pts4D[3]).T  # (N_good, 3)
+    pts4D = pts4D[:, mask_w]
+    pts1 = pts1[mask_w]
+    pts2 = pts2[mask_w]
+    w = w[mask_w]
 
-    # Simple z filtering
+    # Dehomogenise
+    pts3D = (pts4D[:3] / w).T  # (N, 3)
+
+    # --- 4) Simple geometric filtering ---
     z = pts3D[:, 2]
-    mask_z = (z > 0) & (z < 100)
+    mask_z = (z > 0)
+    # TUM depth is in metres -> 0–10 or 0–50 also ok
+
     pts3D = pts3D[mask_z]
+    pts1 = pts1[mask_z]
+    pts2 = pts2[mask_z]
 
     if pts3D.shape[0] == 0:
         print("[TRI] WARNING: no points left after z filtering")
         return pts3D
 
-    # Mild outlier clipping by distance
+    # Mild outlier clipping by distance from origin
     d = np.linalg.norm(pts3D, axis=1)
     r98 = np.percentile(d, 98)
-    pts3D = pts3D[d < r98]
+    mask_d = d < r98
+
+    pts3D = pts3D[mask_d]
+    pts1 = pts1[mask_d]
+    pts2 = pts2[mask_d]
 
     print(f"[TRI] Triangulated {pts3D.shape[0]} filtered 3D points")
-    print(
-        f"[TRI] Stats: "
-        f"x[{pts3D[:,0].min():.3f}, {pts3D[:,0].max():.3f}], "
-        f"y[{pts3D[:,1].min():.3f}, {pts3D[:,1].max():.3f}], "
-        f"z[{pts3D[:,2].min():.3f}, {pts3D[:,2].max():.3f}]"
-    )
 
     if save_file:
         out_name = out_name or "points.npy"
@@ -201,8 +166,15 @@ def triangulate_from_data(
         np.save(out_path, pts3D)
         print(f"[TRI] Saved 3D points to {out_path}")
 
+        # --- 5) Reprojection error on both cameras ---
+    err1 = reprojection_error(pts3D, pts1, np.eye(3), np.zeros((3, 1)), K)
+    err2 = reprojection_error(pts3D, pts2, R, t, K)
+
+    if err1.size > 0:
+        print(f"[TRI] Reproj err cam1: mean={err1.mean():.2f}px, median={
+            np.median(err1):.2f}px")
+    if err2.size > 0:
+        print(f"[TRI] Reproj err cam2: mean={err2.mean():.2f}px, median={
+            np.median(err2):.2f}px")
+
     return pts3D
-
-
-if __name__ == "__main__":
-    triangulate()

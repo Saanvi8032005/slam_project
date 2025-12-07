@@ -8,19 +8,26 @@ Third script to run the individual stages in order:
 
 from pathlib import Path
 import numpy as np
+import sys
 
-# Adjust these imports to match your actual package structure.
-# Example assumes:
-#   project/src/tracking/combined.py
-#   project/src/pose_estimation/pose_estimation.py
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
 from tracking.tracking import matching
-from tracking.lsd_tracking import lsd
+#   from tracking.lsd_tracking import lsd
 from pose_estimation.pose_estimation import pose_estimate
 from triangulation.triangulation import triangulate_from_data
 from visualising.visualising import visualize_points
 from aligning_pc.aligning_pc import align_point_clouds
+from tests.pose_estimation_eval import (
+        build_rgb_to_gt_pose_map,
+        relative_pose_from_rgb_ts,
+        rotation_error_deg,
+        translation_direction_error_deg,
+        GT_PATH,
+    )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
 
@@ -58,18 +65,18 @@ def stage_tracking(img1, img2, pair_id, tracking_results):
              return_data=True,
              out_name=out_file,
              )
-    pts1_line, pts2_line = lsd(img1, img2)
-    #   pts1_all = np.vstack([pts1, pts1_line])
-    #   pts2_all = np.vstack([pts2, pts2_line])
+
+    #   pts1_line, pts2_line = lsd(img1, img2)
     pts1_all = np.vstack([
         np.float32(pts1).reshape(-1, 2),
-        np.float32(pts1_line).reshape(-1, 2)
+        #   np.float32(pts1_line).reshape(-1, 2)
     ])
 
     pts2_all = np.vstack([
         np.float32(pts2).reshape(-1, 2),
-        np.float32(pts2_line).reshape(-1, 2)
+        #   np.float32(pts2_line).reshape(-1, 2)
     ])
+
     entry = {
         "pair_id": pair_id,
         "img1": img1,
@@ -85,7 +92,7 @@ def stage_tracking(img1, img2, pair_id, tracking_results):
     return entry
 
 
-def stage_pose(tracking_entry, pose_store=None):
+def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
     pair_id = tracking_entry["pair_id"]
     pts1 = tracking_entry["pts1"]
     pts2 = tracking_entry["pts2"]
@@ -101,6 +108,24 @@ def stage_pose(tracking_entry, pose_store=None):
             "K": K,
             "mask": maskPose,
         }
+
+    error_print = True
+    if error_print:
+        ts1 = float(img1.stem)
+        ts2 = float(img2.stem)
+        rgb_to_gt_pose = build_rgb_to_gt_pose_map(
+                            GT_PATH,
+                            image_files,
+                            max_diff=0.02
+                        )
+        R_gt, t_gt = relative_pose_from_rgb_ts(rgb_to_gt_pose, ts1, ts2)
+
+        # Errors
+        rot_err = rotation_error_deg(R, R_gt)
+        dir_err = translation_direction_error_deg(t, t_gt)
+        print(f"[POSE][GT] Rotation error:            {rot_err:.3f} deg")
+        print(f"[POSE][GT] Translation direction err: {dir_err:.3f} deg")
+
     return R, t, K, maskPose
 
 
@@ -166,7 +191,8 @@ if __name__ == "__main__":
     points_results = {}
 
     #   (len(image_files) - 1):
-    for i in range(3):
+    for i in range(24):
+        print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
         print(f"[PIPE] Image 2: {image_files[i + 1]}")
@@ -176,7 +202,7 @@ if __name__ == "__main__":
         img2 = image_files[i + 1]
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
-        R, t, K, maskPose = stage_pose(tracking_entry, pose_results)
+        R, t, K, maskPose = stage_pose(tracking_entry, pose_results, img1, img2)
         pose_entry = pose_results[pair_id]
 
         pts3D = stage_triangulate(tracking_entry,

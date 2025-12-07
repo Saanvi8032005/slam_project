@@ -63,7 +63,7 @@ OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
         coefficients in calibration file")
 
     return K, dist
-    """
+"""
 
 
 def load_calibration():
@@ -83,7 +83,10 @@ def load_calibration():
     return K, dist
 
 
-def pose_estimate(pts1, pts2):
+def pose_estimate(pts1, 
+                  pts2, 
+                  log_err: bool | None = None
+                  ):
     # Ensure proper type
     pts1 = np.asarray(pts1, dtype=np.float32)
     pts2 = np.asarray(pts2, dtype=np.float32)
@@ -91,8 +94,8 @@ def pose_estimate(pts1, pts2):
     print(f"[POSE] Loaded {pts1.shape[0]} matches")
     K, dist = load_calibration()
 
-    #   pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
-    #   pts2 = cv.undistortPoints(pts2.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
+    pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
+    pts2 = cv.undistortPoints(pts2.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
 
     if pts1.shape[0] == 0 or pts2.shape[0] == 0:
         raise ValueError("[POSE] No points provided for pose estimation")
@@ -105,18 +108,17 @@ def pose_estimate(pts1, pts2):
             dist = dist_loaded
 
     E, maskE = cv.findEssentialMat(      #   maskE unused
-        pts1, pts2, K,
+        pts1, pts2,
+        focal=1.0,
+        pp=(0.0, 0.0),
         method=cv.RANSAC,
         prob=0.999,
-        threshold=1.0
+        threshold=0.001,
     )
     if E is None:
         raise RuntimeError("Essential matrix estimation failed")
 
     n_inliers, R, t, maskPose = cv.recoverPose(E, pts1, pts2, K)
-
-    print("[POSE] Rotation R:\n", R)
-    print("[POSE] Translation t^T\n", t.T)
 
     save_file = False
     if save_file:
@@ -141,5 +143,4 @@ def pose_estimate(pts1, pts2):
 
 
 if __name__ == "__main__":
-    #   pose_estimate("matches_left03_left04.npz")
     print('Run from pipeline.py')

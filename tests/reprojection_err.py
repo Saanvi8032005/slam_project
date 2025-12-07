@@ -12,6 +12,9 @@ def reprojection_error(pts3D, pts_img, R, t, K):
     pts3D = np.asarray(pts3D, dtype=np.float64)
     pts_img = np.asarray(pts_img, dtype=np.float64)
 
+    if pts3D.shape[0] == 0:
+        return np.array([])
+
     P = K @ np.hstack((R, t))      # 3x4
     X_h = np.hstack([pts3D, np.ones((pts3D.shape[0], 1))]).T  # 4xN
 
