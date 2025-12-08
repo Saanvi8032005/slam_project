@@ -27,8 +27,6 @@ from tests.pose_estimation_eval import (
         translation_direction_error_deg,
         GT_PATH,
     )
-from aligning_pc.icp import icp
-
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
 
@@ -171,12 +169,13 @@ def stage_triangulate(tracking_entry, pose_entry, points_store=None):
 def stage_align_pc(pose_results, points_results):
     print("\n=== STAGE 4: ALIGNING POINT CLOUDS ===")
 
-    align_point_clouds(
+    global_points = align_point_clouds(
         pose_results,
         points_results,
         output_name="global_points.npy",
         save=False,
     )
+    return global_points
 
 
 def stage_visualise(points_file):
@@ -192,6 +191,23 @@ def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean):
     return True
 
 
+def save_global_points(global_points):
+    if global_points is None or global_points.size == 0:
+        print("[PIPE] No global points to save.")
+        print("\n[PIPE] Done processing all image pairs.")
+    else:
+        # Remove infinities / NaNs
+        mask = np.isfinite(global_points).all(axis=1)
+        pts = global_points[mask]
+
+        # Option 1: save in project root
+        # np.savetxt("global_points.xyz", pts)
+
+        # Option 2 (nicer): save into outputs/aligning_pc
+        out_path = PROJECT_ROOT / "outputs" / "aligning_pc" / "global_points_debug.xyz"
+        np.savetxt(out_path, pts)
+
+
 if __name__ == "__main__":
 
     image_files = load_image_files()
@@ -201,7 +217,7 @@ if __name__ == "__main__":
     tracking_acceptance = 0
 
     #   (len(image_files) - 1):
-    for i in range(5):
+    for i in range(24):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -231,8 +247,9 @@ if __name__ == "__main__":
             # remove this pair from the pose / points stores so it doesn't go into map/alignment
             pose_results.pop(pair_id, None)
             points_results.pop(pair_id, None)
-    
+
     print(tracking_acceptance, "keyframes accepted out of", len(tracking_results))
-    global_points_file = stage_align_pc(pose_results, points_results)
-    #   stage_visualise(global_points_file)
+
+    global_points = stage_align_pc(pose_results, points_results)
+    save_global_points(global_points)
     print("\n[PIPE] Done processing all image pairs.")

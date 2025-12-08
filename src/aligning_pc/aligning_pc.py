@@ -18,6 +18,7 @@ points_results: dict
 import numpy as np
 from pathlib import Path
 import os
+from aligning_pc.icp import icp
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -31,25 +32,47 @@ def align_point_clouds(pose_results: dict,
                        save=None
                        ):
 
-    pair_ids = sorted(pose_results.keys())    
+    pair_ids = sorted(pose_results.keys())
     #   check again
 
-    # 2) Compute camera poses C_k in world frame
-    #    C_0 = I, then C_{k+1} = C_k * T_k
     camera_poses = []  # list of 4x4 matrices, one per camera
     C = np.eye(4)      # world = camera 0 frame
     camera_poses.append(C)
 
-    for pid in pair_ids:
+    prev_pts = None     # previous pair's local cloud
+
+    for idx, pid in enumerate(pair_ids):
         R = pose_results[pid]["R"].reshape(3, 3)
         t = pose_results[pid]["t"].reshape(3, 1)
 
+        # --- Optional ICP refinement for local mapping ---
+        curr_pts = points_results[pid]["points"]  # (N, 3) in camera i frame
+
+        if prev_pts is not None and curr_pts.size > 0 and prev_pts.size > 0:
+            try:
+                # only run if we have enough points
+                if prev_pts.shape[0] >= 50 and curr_pts.shape[0] >= 50:
+                    R_icp, t_icp = icp(
+                        A=prev_pts,      # frame i-1 points
+                        B=curr_pts,      # frame i points
+                        init_R=R,
+                        init_t=t,
+                    )
+                    R = R_icp
+                    t = t_icp
+            except Exception as e:
+                print(f"[ALIGN][ICP] Skipping ICP for {pid}: {e}")
+
+        prev_pts = curr_pts
+
+        # --- Build transform with (possibly) refined R, t ---
         T = np.eye(4)
         T[:3, :3] = R
-        T[:3, 3:] = t
+        T[:3, 3] = t.reshape(3)
 
-        C = C @ T          # pose of next camera
+        C = C @ T          # pose of next camera in world
         camera_poses.append(C)
+
 
     # camera_poses[k] = pose of camera k in world frame
     # pair "000" uses camera 0, pair "001" uses camera 1, etc.
@@ -74,15 +97,17 @@ def align_point_clouds(pose_results: dict,
         return np.empty((0, 3))
 
     global_points = np.vstack(global_points_list)
-        # --- OPTIONAL: normalise global scale for nicer visualisation ---
+    # --- OPTIONAL: normalise global scale for nicer visualisation ---
     # target radius in "world units" (e.g. 5 m)
+
 
     # Save
     if save:
         out_path = testing_dir / output_name
         np.save(out_path, global_points)
         print(f"[ALIGN] Saved global point cloud: {out_path}")
-    debug = True
+
+    debug = False 
     if debug:
         try:
             import matplotlib.pyplot as plt

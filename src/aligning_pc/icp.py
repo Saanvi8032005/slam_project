@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.spatial import cKDTree
 
+
 def best_fit_transform(A, B):
     """
     Computes the least-squares rigid transform T that aligns A → B.

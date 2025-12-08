@@ -90,7 +90,7 @@ def triangulate_from_data(
 
     print(f"[TRI] Initial correspondences: {pts1.shape[0]}")
 
-    MIN_INLIERS = 50  # or 50, tune this
+    MIN_INLIERS = 25  # or 50, tune this
 
     if mask is not None:
         m = mask.ravel().astype(bool)
@@ -169,7 +169,8 @@ def triangulate_from_data(
         # --- 5) Reprojection error on both cameras ---
     err1 = reprojection_error(pts3D, pts1, np.eye(3), np.zeros((3, 1)), K)
     err2 = reprojection_error(pts3D, pts2, R, t, K)
-
+    mean1 = err1.mean() if err1.size > 0 else 0.0
+    mean2 = err2.mean() if err2.size > 0 else 0.0
     if err1.size > 0:
         print(f"[TRI] Reproj err cam1: mean={err1.mean():.2f}px, median={
             np.median(err1):.2f}px")
@@ -177,7 +178,7 @@ def triangulate_from_data(
         print(f"[TRI] Reproj err cam2: mean={err2.mean():.2f}px, median={
             np.median(err2):.2f}px")
     if err1.size != 0 or err2.size != 0:
-        err_mean = max(err1.max(), err2.max())
+        err_mean = max(mean1, mean2)
     else:
         err_mean = 0
     return pts3D, err_mean

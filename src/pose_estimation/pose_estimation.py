@@ -107,7 +107,7 @@ def pose_estimate(pts1,
         if dist is None:
             dist = dist_loaded
 
-    E, maskE = cv.findEssentialMat(      #   maskE unused
+    E, maskE = cv.findEssentialMat(
         pts1, pts2, K,
         method=cv.RANSAC,
         prob=0.999,
@@ -122,15 +122,15 @@ def pose_estimate(pts1,
     print(f"[POSE] RANSAC inliers (findEssentialMat): "
     f"{num_inliers_E}/{len(maskE_bool)} ({ratio_E:.2f})")
 
-    n_inliers, R, t, maskPose = cv.recoverPose(E, pts1, pts2, mask=maskE)
-    t = np.asarray(t, dtype=np.float64).reshape(3, 1)
-    t = np.linalg.norm(t)
+    n_inliers, R, t, maskPose = cv.recoverPose(E, pts1, pts2, K, mask=maskE)
+    t = t.reshape(3, 1)
+    t /= (np.linalg.norm(t) + 1e-12)
 
     # maskPose is defined over the same subset where maskE == 1
     maskPose_bool = maskPose.ravel().astype(bool)
     num_inliers_pose = maskPose_bool.sum()
     # number of points actually considered by recoverPose:
-    num_considered = num_inliers_E
+    num_considered = len(maskPose_bool)
     ratio_pose = num_inliers_pose / max(num_considered, 1)
 
     save_file = False
@@ -142,7 +142,7 @@ def pose_estimate(pts1,
 
 
     # Flagging bad poses, was 0.05
-    if num_inliers_pose < 30 or ratio_pose < 0.1:
+    if num_inliers_pose < 50 or ratio_pose < 0.1:
         print("[POSE][WARN] Very few inliers – pose may be unreliable")
 
     print("[POSE] Rotation R:\n", R)

@@ -44,4 +44,4 @@ def visualize_points(points_file="global_points.npy"):
 
 
 if __name__ == "__main__":
-    visualize_points()
+    print("run from pipeline")

@@ -13,7 +13,7 @@ from src.pose_estimation.pose_estimation import pose_estimate
 # Import TUM's associate utils, get rid of . if running from here
 from .associate import read_file_list, associate
 
-GT_PATH = PROJECT_ROOT / "data" / "ground_truth" / "groundtruth.txt"
+GT_PATH = PROJECT_ROOT / "data" / "rgb_dataset" / "groundtruth.txt"
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 
 
