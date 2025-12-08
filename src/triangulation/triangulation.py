@@ -90,7 +90,7 @@ def triangulate_from_data(
 
     print(f"[TRI] Initial correspondences: {pts1.shape[0]}")
 
-    MIN_INLIERS = 30  # or 50, tune this
+    MIN_INLIERS = 50  # or 50, tune this
 
     if mask is not None:
         m = mask.ravel().astype(bool)
@@ -99,14 +99,14 @@ def triangulate_from_data(
 
         if num_inliers < MIN_INLIERS:
             print("[TRI] Too few inliers; skipping this pair entirely")
-            return np.empty((0, 3), dtype=np.float32)
+            return np.empty((0, 3), dtype=np.float32), 1
 
         pts1 = pts1[m]
         pts2 = pts2[m]
 
     if pts1.shape[0] < 2:
         print("[TRI] Not enough points to triangulate, returning empty array")
-        return np.empty((0, 3), dtype=np.float32)
+        return np.empty((0, 3), dtype=np.float32), 1
 
     print(f"[TRI] Loaded {pts1.shape[0]} matches for triangulation")
 
@@ -125,7 +125,7 @@ def triangulate_from_data(
     mask_w = np.abs(w) > 1e-6
     if not np.any(mask_w):
         print("[TRI] All points had near-zero w; returning empty point cloud")
-        return np.empty((0, 3), dtype=np.float32)
+        return np.empty((0, 3), dtype=np.float32), 1
 
     pts4D = pts4D[:, mask_w]
     pts1 = pts1[mask_w]
@@ -146,7 +146,7 @@ def triangulate_from_data(
 
     if pts3D.shape[0] == 0:
         print("[TRI] WARNING: no points left after z filtering")
-        return pts3D
+        return pts3D, 1
 
     # Mild outlier clipping by distance from origin
     d = np.linalg.norm(pts3D, axis=1)
@@ -176,5 +176,8 @@ def triangulate_from_data(
     if err2.size > 0:
         print(f"[TRI] Reproj err cam2: mean={err2.mean():.2f}px, median={
             np.median(err2):.2f}px")
-
-    return pts3D
+    if err1.size != 0 or err2.size != 0:
+        err_mean = max(err1.max(), err2.max())
+    else:
+        err_mean = 0
+    return pts3D, err_mean

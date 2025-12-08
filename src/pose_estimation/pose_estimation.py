@@ -83,8 +83,8 @@ def load_calibration():
     return K, dist
 
 
-def pose_estimate(pts1, 
-                  pts2, 
+def pose_estimate(pts1,
+                  pts2,
                   log_err: bool | None = None
                   ):
     # Ensure proper type
@@ -94,8 +94,8 @@ def pose_estimate(pts1,
     print(f"[POSE] Loaded {pts1.shape[0]} matches")
     K, dist = load_calibration()
 
-    pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
-    pts2 = cv.undistortPoints(pts2.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
+    #   pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
+    #   pts2 = cv.undistortPoints(pts2.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
 
     if pts1.shape[0] == 0 or pts2.shape[0] == 0:
         raise ValueError("[POSE] No points provided for pose estimation")
@@ -108,17 +108,30 @@ def pose_estimate(pts1,
             dist = dist_loaded
 
     E, maskE = cv.findEssentialMat(      #   maskE unused
-        pts1, pts2,
-        focal=1.0,
-        pp=(0.0, 0.0),
+        pts1, pts2, K,
         method=cv.RANSAC,
         prob=0.999,
-        threshold=0.001,
+        threshold=1.0,
     )
     if E is None:
         raise RuntimeError("Essential matrix estimation failed")
 
-    n_inliers, R, t, maskPose = cv.recoverPose(E, pts1, pts2, K)
+    maskE_bool = maskE.ravel().astype(bool)
+    num_inliers_E = maskE_bool.sum()
+    ratio_E = num_inliers_E / len(maskE_bool)
+    print(f"[POSE] RANSAC inliers (findEssentialMat): "
+    f"{num_inliers_E}/{len(maskE_bool)} ({ratio_E:.2f})")
+
+    n_inliers, R, t, maskPose = cv.recoverPose(E, pts1, pts2, mask=maskE)
+    t = np.asarray(t, dtype=np.float64).reshape(3, 1)
+    t = np.linalg.norm(t)
+
+    # maskPose is defined over the same subset where maskE == 1
+    maskPose_bool = maskPose.ravel().astype(bool)
+    num_inliers_pose = maskPose_bool.sum()
+    # number of points actually considered by recoverPose:
+    num_considered = num_inliers_E
+    ratio_pose = num_inliers_pose / max(num_considered, 1)
 
     save_file = False
     if save_file:
@@ -127,19 +140,18 @@ def pose_estimate(pts1,
         np.savez(pose_path, R=R, t=t, K=K)
         print(f"[POSE] Saved pose to {pose_path}")
 
-    mask = maskPose.ravel().astype(bool)
-    inlier_ratio = mask.mean()  # inliers / total
-    num_inliers = mask.sum()
 
     # Flagging bad poses, was 0.05
-    if num_inliers < 30 or inlier_ratio < 0.1:
+    if num_inliers_pose < 30 or ratio_pose < 0.1:
         print("[POSE][WARN] Very few inliers – pose may be unreliable")
 
     print("[POSE] Rotation R:\n", R)
     print("[POSE] Translation t^T\n", t.T)
-    print(f"[POSE] Inliers: {num_inliers}/{len(mask)} ({inlier_ratio:.2f})")
-
-    return R, t, K, maskPose
+    print(
+        f"[POSE] Inliers after recoverPose: "
+        f"{num_inliers_pose}/{num_considered} ({ratio_pose:.2f})"
+    )
+    return R, t, K, maskPose, num_inliers_pose, ratio_pose
 
 
 if __name__ == "__main__":

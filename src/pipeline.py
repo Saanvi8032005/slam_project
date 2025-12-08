@@ -27,6 +27,7 @@ from tests.pose_estimation_eval import (
         translation_direction_error_deg,
         GT_PATH,
     )
+from aligning_pc.icp import icp
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
@@ -98,7 +99,7 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
     pts2 = tracking_entry["pts2"]
 
     print(f"\n=== STAGE 2: POSE ESTIMATION ({pair_id})===")
-    R, t, K, maskPose = pose_estimate(pts1, pts2)
+    R, t, K, maskPose, num_inliers_pose, ratio_pose = pose_estimate(pts1, pts2)
 
     if pose_store is not None:
         pose_store[pair_id] = {
@@ -126,7 +127,7 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
         print(f"[POSE][GT] Rotation error:            {rot_err:.3f} deg")
         print(f"[POSE][GT] Translation direction err: {dir_err:.3f} deg")
 
-    return R, t, K, maskPose
+    return R, t, K, maskPose, num_inliers_pose, ratio_pose
 
 
 def stage_triangulate(tracking_entry, pose_entry, points_store=None):
@@ -148,7 +149,7 @@ def stage_triangulate(tracking_entry, pose_entry, points_store=None):
     K = pose_entry["K"]
     mask = pose_entry.get("mask", None)
 
-    pts3D = triangulate_from_data(
+    pts3D, err_mean = triangulate_from_data(
         pts1,
         pts2,
         R,
@@ -164,7 +165,7 @@ def stage_triangulate(tracking_entry, pose_entry, points_store=None):
             "pair_id": pair_id,
             "points": pts3D,
         }
-    return pts3D
+    return pts3D, err_mean
 
 
 def stage_align_pc(pose_results, points_results):
@@ -183,15 +184,24 @@ def stage_visualise(points_file):
     visualize_points(points_file=str(points_file))
 
 
+def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean):
+    if num_inliers < 80: return False
+    if inlier_ratio < 0.4: return False
+    if reproj_mean > 1.5: return False
+    #   if num_3d_points < 50: return False     # alr checking for in triangulation
+    return True
+
+
 if __name__ == "__main__":
 
     image_files = load_image_files()
     tracking_results = {}
     pose_results = {}
     points_results = {}
+    tracking_acceptance = 0
 
     #   (len(image_files) - 1):
-    for i in range(24):
+    for i in range(5):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -202,13 +212,27 @@ if __name__ == "__main__":
         img2 = image_files[i + 1]
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
-        R, t, K, maskPose = stage_pose(tracking_entry, pose_results, img1, img2)
+        R, t, K, maskPose, num_inliers, inlier_ratio = stage_pose(tracking_entry, pose_results, img1, img2)
         pose_entry = pose_results[pair_id]
 
-        pts3D = stage_triangulate(tracking_entry,
-                                  pose_entry,
-                                  points_store=points_results)
+        pts3D, err_mean = stage_triangulate(tracking_entry,
+                                            pose_entry,
+                                            points_store=points_results)
 
-    stage_align_pc(pose_results, points_results)
+
+        if is_good_keyframe(num_inliers, inlier_ratio, err_mean):
+            print(f"[KF] Accepting keyframe {pair_id}")
+            # keep pose_results[pair_id] and points_results[pair_id] as they are
+            tracking_acceptance += 1
+            if err_mean == 1:
+                tracking_acceptance -= 1  # don't count empty triangulations
+        else:
+            print(f"[KF] Rejecting keyframe {pair_id} (low quality)")
+            # remove this pair from the pose / points stores so it doesn't go into map/alignment
+            pose_results.pop(pair_id, None)
+            points_results.pop(pair_id, None)
+    
+    print(tracking_acceptance, "keyframes accepted out of", len(tracking_results))
+    global_points_file = stage_align_pc(pose_results, points_results)
     #   stage_visualise(global_points_file)
     print("\n[PIPE] Done processing all image pairs.")
