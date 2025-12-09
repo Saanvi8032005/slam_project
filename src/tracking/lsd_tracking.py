@@ -315,7 +315,7 @@ def lsd(
 
     print(f"[SLAM] returning {pts1.shape[0]} line-midpoint matches")
 
-    InPipeline = True
+    InPipeline = False
     if InPipeline:
         return pts1, pts2
     else:
