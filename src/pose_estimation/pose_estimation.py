@@ -111,7 +111,7 @@ def pose_estimate(pts1,
         pts1, pts2, K,
         method=cv.RANSAC,
         prob=0.999,
-        threshold=1.0,
+        threshold=0.5,
     )
     if E is None:
         raise RuntimeError("Essential matrix estimation failed")
@@ -126,10 +126,8 @@ def pose_estimate(pts1,
     t = t.reshape(3, 1)
     t /= (np.linalg.norm(t) + 1e-12)
 
-    # maskPose is defined over the same subset where maskE == 1
     maskPose_bool = maskPose.ravel().astype(bool)
     num_inliers_pose = maskPose_bool.sum()
-    # number of points actually considered by recoverPose:
     num_considered = len(maskPose_bool)
     ratio_pose = num_inliers_pose / max(num_considered, 1)
 
@@ -139,7 +137,6 @@ def pose_estimate(pts1,
         pose_path = OUTPUT_DIR / "pose.npz"
         np.savez(pose_path, R=R, t=t, K=K)
         print(f"[POSE] Saved pose to {pose_path}")
-
 
     # Flagging bad poses, was 0.05
     if num_inliers_pose < 50 or ratio_pose < 0.1:
@@ -151,8 +148,11 @@ def pose_estimate(pts1,
         f"[POSE] Inliers after recoverPose: "
         f"{num_inliers_pose}/{num_considered} ({ratio_pose:.2f})"
     )
-    return R, t, K, maskPose, num_inliers_pose, ratio_pose
 
+    return R, t, K, maskE, num_inliers_E, ratio_E
+
+#  maskE comes from findEssentialMatrix, RANSAC: use me
+#  num_inliers_pose is from recoverPose
 
 if __name__ == "__main__":
     print('Run from pipeline.py')
