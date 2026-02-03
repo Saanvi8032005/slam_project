@@ -116,7 +116,8 @@ def pose_estimate(pts1,
     if E is None:
         raise RuntimeError("Essential matrix estimation failed")
 
-    maskE_bool = maskE.ravel().astype(bool)
+    mask_ransac = maskE.copy()
+    maskE_bool = mask_ransac.ravel().astype(bool)
     num_inliers_E = maskE_bool.sum()
     ratio_E = num_inliers_E / len(maskE_bool)
     print(f"[POSE] RANSAC inliers (findEssentialMat): "
@@ -149,7 +150,7 @@ def pose_estimate(pts1,
         f"{num_inliers_pose}/{num_considered} ({ratio_pose:.2f})"
     )
 
-    return R, t, K, maskE, num_inliers_E, ratio_E
+    return R, t, K, maskPose, num_inliers_pose, ratio_pose
 
 #  maskE comes from findEssentialMatrix, RANSAC: use me
 #  num_inliers_pose is from recoverPose

@@ -9,6 +9,8 @@ Third script to run the individual stages in order:
 from pathlib import Path
 import numpy as np
 import sys
+import matplotlib.pyplot as plt
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -27,6 +29,9 @@ from tests.pose_estimation_eval import (
         translation_direction_error_deg,
         GT_PATH,
     )
+from keyframe_selection.keyframe_selec import Map, Edge, print_map
+from keyframe_selection.keyframe_helpers import make_T, kps_to_xy
+
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
 
@@ -97,7 +102,7 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
     pts2 = tracking_entry["pts2"]
 
     print(f"\n=== STAGE 2: POSE ESTIMATION ({pair_id})===")
-    R, t, K, maskPose, num_inliers_pose, ratio_pose = pose_estimate(pts1, pts2)
+    R, t, K, mask, num_inliers, ratio = pose_estimate(pts1, pts2)
 
     if pose_store is not None:
         pose_store[pair_id] = {
@@ -105,7 +110,7 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
             "R": R,
             "t": t,
             "K": K,
-            "mask": maskPose,
+            "mask": mask,
         }
 
     error_print = True
@@ -125,7 +130,7 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
         print(f"[POSE][GT] Rotation error:            {rot_err:.3f} deg")
         print(f"[POSE][GT] Translation direction err: {dir_err:.3f} deg")
 
-    return R, t, K, maskPose, num_inliers_pose, ratio_pose
+    return R, t, K, mask, num_inliers, ratio, rot_err, dir_err
 
 
 def stage_triangulate(tracking_entry, pose_entry, points_store=None):
@@ -204,8 +209,94 @@ def save_global_points(global_points):
         # np.savetxt("global_points.xyz", pts)
 
         # Option 2 (nicer): save into outputs/aligning_pc
-        out_path = PROJECT_ROOT / "outputs" / "aligning_pc" / "global_points_debug.xyz"
+        out_path = PROJECT_ROOT / "outputs" / "aligning_pc" / "global_points_pose.xyz"
         np.savetxt(out_path, pts)
+
+
+def print_stats(name, arr, want_min=True):
+    arr = np.array(arr, dtype=float)
+    if arr.size == 0:
+        print(f"[STATS] {name}: no data")
+        return
+    mean = arr.mean()
+    median = np.median(arr)
+    minv = arr.min()
+    maxv = arr.max()
+    if want_min:
+        print(f"[STATS] {name}: mean={mean:.3f}, median={median:.3f}, "
+                f"min={minv:.3f}, max={maxv:.3f}")
+    else:
+        print(f"[STATS] {name}: mean={mean:.3f}, median={median:.3f}, "
+                f"max={maxv:.3f}")
+
+
+def histogram(rot_err_arr):
+    rot_err_arr = np.array(rot_err_arr, dtype=float)
+
+    # Crop small rotation errors (<10°)
+    small = rot_err_arr[rot_err_arr < 0.8]
+
+    # Plot histogram
+    plt.figure(figsize=(8, 5))
+    plt.hist(small, bins=20, edgecolor='black')
+    plt.xlabel("Reprojection Error (degrees, cropped)")
+    plt.ylabel("Frequency")
+    plt.title("Histogram of Reprojection Errors ")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # Print catastrophic failures
+    num_big = np.sum(rot_err_arr >= 10)
+    print(f"Number of catastrophic failures (≥10°): {num_big}")
+
+
+def initialize_map(
+    slam_map,
+    frame_id0: int,
+    frame_id1: int,
+    K: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    kp1,
+    kp2,
+    des1=None,
+    des2=None,
+):
+    """
+    Initialise pose-graph map with two keyframes and one odometry edge.
+
+    Conventions:
+      - Keyframe stores T_cw (world -> camera)
+      - recoverPose returns motion cam0 -> cam1, so T_rel = make_T(R,t)
+      - Set world frame = camera(frame_id0) at init => T_cw0 = I, T_cw1 = T_rel
+    """
+    T_rel = make_T(R, t)       # cam(frame_id0) -> cam(frame_id1)
+    T_cw0 = np.eye(4)
+    T_cw1 = T_rel @ T_cw0      # = T_rel
+
+    kf0 = slam_map.create_keyframe(
+        frame_id=frame_id0,
+        T_cw=T_cw0,
+        K=K,
+        kps=kps_to_xy(kp1),
+        des=des1
+    )
+
+    kf1 = slam_map.create_keyframe(
+        frame_id=frame_id1,
+        T_cw=T_cw1,
+        K=K,
+        kps=kps_to_xy(kp2),
+        des=des2
+    )
+
+    slam_map.add_edge(
+        Edge(kf_i=kf0.kf_id, kf_j=kf1.kf_id, T_ij=T_rel, edge_type="odometry")
+    )
+
+    print(f"[MAP] Initialised: KF{kf0.kf_id} (frame {frame_id0}) -> KF{kf1.kf_id} (frame {frame_id1})")
+    return kf0.kf_id, kf1.kf_id
 
 
 if __name__ == "__main__":
@@ -215,9 +306,19 @@ if __name__ == "__main__":
     pose_results = {}
     points_results = {}
     tracking_acceptance = 0
+    ransac_ratios = []          # for report
+    rot_errors = []             # for report
+    trans_dir_errors = []       # for report
+    tri_counts = []             # for report
+    tri_errors = []             # for report
+
+    slam_map = Map()
+    is_initialized = False
+    init_kf0_id = None
+    init_kf1_id = None
 
     #   (len(image_files) - 1):
-    for i in range(24):
+    for i in range(10 - 1):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -228,18 +329,44 @@ if __name__ == "__main__":
         img2 = image_files[i + 1]
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
-        R, t, K, maskPose, num_inliers, inlier_ratio = stage_pose(tracking_entry, pose_results, img1, img2)
+        R, t, K, mask, num_inliers, inlier_ratio, rot_err, dir_err = stage_pose(tracking_entry, pose_results, img1, img2)
+
         pose_entry = pose_results[pair_id]
+        if i == 2:
+            init_kf0_id, init_kf1_id = initialize_map(
+                slam_map=slam_map,
+                frame_id0=i,
+                frame_id1=i+1,
+                K=K,
+                R=R,
+                t=t,
+                kp1=tracking_entry["kp1"],
+                kp2=tracking_entry["kp2"],
+                des1=tracking_entry.get("des1", None),
+                des2=tracking_entry.get("des2", None),
+            )
+            print(f"[MAP] Initialized with (frame {i}) and (frame {i+1})")
+            # print current map state CHECKS BELOW
+            if False:
+                print_map(slam_map)          
+        ransac_ratios.append(inlier_ratio)  # for report
+        if rot_err is not None:
+            rot_errors.append(rot_err)
+        if dir_err is not None:
+            trans_dir_errors.append(dir_err)
+
 
         pts3D, err_mean = stage_triangulate(tracking_entry,
                                             pose_entry,
                                             points_store=points_results)
+        tri_counts.append(pts3D.shape[0])
+        tri_errors.append(err_mean)
 
-
-        if is_good_keyframe(num_inliers, inlier_ratio, err_mean):
+        if is_good_keyframe(num_inliers, inlier_ratio, err_mean) and pts3D.shape[0] > 0:
             print(f"[KF] Accepting keyframe {pair_id}")
             # keep pose_results[pair_id] and points_results[pair_id] as they are
             tracking_acceptance += 1
+                # create first keyframe from img1 only once
             if err_mean == 1:
                 tracking_acceptance -= 1  # don't count empty triangulations
         else:
@@ -250,6 +377,24 @@ if __name__ == "__main__":
 
     print(tracking_acceptance, "keyframes accepted out of", len(tracking_results))
 
+
+    print("\n================ GLOBAL POSE STATS ================\n")
+    print_stats("RANSAC inlier ratio", ransac_ratios, want_min=True)
+    print_stats("Rotation error [deg]", rot_errors, want_min=False)
+    print_stats("Translation-direction error [deg]", trans_dir_errors, want_min=False)
+    print("\n===================================================\n")
+
+    histogram(tri_errors)
+    print("\n================ TRIANGULATION STATS ==============\n")
+    print_stats("Num 3D points per pair", tri_counts, want_min=True)
+    print_stats("Mean reprojection error [px]", tri_errors, want_min=True)
+    print("\n===================================================\n")
+
+    """
     global_points = stage_align_pc(pose_results, points_results)
-    save_global_points(global_points)
+    if True:
+        visualize_points(points_file="global_points.npy")
+    else:
+        save_global_points(global_points)
     print("\n[PIPE] Done processing all image pairs.")
+    """

@@ -95,7 +95,7 @@ def triangulate_from_data(
     if mask is not None:
         m = mask.ravel().astype(bool)
         num_inliers = m.sum()
-        print(f"[TRI] Using {num_inliers} inliers after pose mask")
+        print(f"[TRI] Using {num_inliers} inliers after mask")
 
         if num_inliers < MIN_INLIERS:
             print("[TRI] Too few inliers; skipping this pair entirely")
