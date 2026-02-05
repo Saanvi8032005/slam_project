@@ -26,7 +26,6 @@ maskPose : (N,) uint8
 import numpy as np
 import cv2 as cv
 from pathlib import Path
-#   import re
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,38 +34,10 @@ CALIB_FILE = CALIB_DIR / "calibration_results.txt"
 OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pose_estimation"
 
 
-#   check notation of () below pls
-"""
-    def load_calibration(calib_path: Path = CALIB_FILE):
-    Reads camera matrix and distortion coefficients from a text file.
-    with open(calib_path, "r") as f:
-        text = f.read()
-
-    # --- Extract the 3x3 camera matrix ---
-    mtx_str = re.findall(r"\[\[(.*?)\]\]", text, re.S)[0]
-    if not mtx_str:
-        raise ValueError("Could not find camera matrix in calibration file")
-
-    rows = mtx_str.strip().split("\n")
-    K = np.array([
-        [float(n) for n in row.replace("[", "").replace("]", "").split()]
-        for row in rows
-    ], dtype=np.float32)
-
-    # --- Extract distortion ---
-    dist_str = re.findall(
-        r"Distortion coefficients \(dist\):\s*\[(.*?)\]", text, re.S
-    )[0]
-    dist = np.array([float(x) for x in dist_str.split()], dtype=np.float32)
-    if not dist:
-        raise ValueError("Could not find distortion
-        coefficients in calibration file")
-
-    return K, dist
-"""
-
-
 def load_calibration():
+    """
+    Load camera intrinsic matrix and distortion coefficients.
+    """
     K = np.array([
         [517.3,   0.0, 318.6],
         [0.0, 516.5, 255.3],
@@ -83,10 +54,27 @@ def load_calibration():
     return K, dist
 
 
-def pose_estimate(pts1,
-                  pts2,
-                  log_err: bool | None = None
-                  ):
+def pose_estimate(pts1, pts2, log_err: bool | None = None):
+    """
+    Estimate relative pose (R, t) between two views using matched points.
+    Includes parallax gating to skip low-parallax pairs.
+
+    Parameters
+    ----------
+    pts1, pts2 : (N, 2) float32
+        Matched pixel coordinates in image 1 and image 2.
+
+    Returns
+    -------
+    R : (3, 3) float64
+        Rotation from camera 1 to camera 2.
+    t : (3, 1) float64
+        Unit translation direction (scale is unknown in monocular case).
+    K : (3, 3) float32
+        Intrinsic matrix used.
+    maskPose : (N,) uint8
+        Inlier mask returned by recoverPose (1 = inlier).
+    """
     # Ensure proper type
     pts1 = np.asarray(pts1, dtype=np.float32)
     pts2 = np.asarray(pts2, dtype=np.float32)
@@ -94,24 +82,31 @@ def pose_estimate(pts1,
     print(f"[POSE] Loaded {pts1.shape[0]} matches")
     K, dist = load_calibration()
 
-    #   pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
-    #   pts2 = cv.undistortPoints(pts2.reshape(-1, 1, 2), K, dist).reshape(-1, 2)
+    # Compute parallax (flow)
+    flow = np.linalg.norm(pts2 - pts1, axis=1)
+    median_flow = np.median(flow)
+    PARALLAX_PX_THRESH = 2.0  # Threshold for parallax in pixels
+
+    print(f"[POSE] Median flow: {median_flow:.2f} px")
+    if median_flow < PARALLAX_PX_THRESH:
+        print(f"[POSE] Low parallax: median flow {median_flow:.2f} px -> skipping pair")
+        return None, None, K, None, 0, 0.0
+
+    # Undistort points
+    pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
+    pts2 = cv.undistortPoints(pts2.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
 
     if pts1.shape[0] == 0 or pts2.shape[0] == 0:
         raise ValueError("[POSE] No points provided for pose estimation")
     if pts1.shape != pts2.shape or pts1.shape[1] != 2:
         raise ValueError(f"[POSE] Expected pts1, pts2 of shape (N, 2), got {pts1.shape}, {pts2.shape}")
 
-    if K is None:
-        K, dist_loaded = load_calibration()
-        if dist is None:
-            dist = dist_loaded
-
+    # Estimate essential matrix
     E, maskE = cv.findEssentialMat(
         pts1, pts2, K,
         method=cv.RANSAC,
         prob=0.999,
-        threshold=0.5,
+        threshold=0.75  # Increased threshold for RANSAC
     )
     if E is None:
         raise RuntimeError("Essential matrix estimation failed")
@@ -121,27 +116,22 @@ def pose_estimate(pts1,
     num_inliers_E = maskE_bool.sum()
     ratio_E = num_inliers_E / len(maskE_bool)
     print(f"[POSE] RANSAC inliers (findEssentialMat): "
-    f"{num_inliers_E}/{len(maskE_bool)} ({ratio_E:.2f})")
+          f"{num_inliers_E}/{len(maskE_bool)} ({ratio_E:.2f})")
 
+    # Recover pose
     n_inliers, R, t, maskPose = cv.recoverPose(E, pts1, pts2, K, mask=maskE)
     t = t.reshape(3, 1)
     t /= (np.linalg.norm(t) + 1e-12)
 
+    # Debugging: Check inliers after recoverPose
     maskPose_bool = maskPose.ravel().astype(bool)
     num_inliers_pose = maskPose_bool.sum()
     num_considered = len(maskPose_bool)
     ratio_pose = num_inliers_pose / max(num_considered, 1)
 
-    save_file = False
-    if save_file:
-        #   NEW: save pose + intrinsics for triangulation stage
-        pose_path = OUTPUT_DIR / "pose.npz"
-        np.savez(pose_path, R=R, t=t, K=K)
-        print(f"[POSE] Saved pose to {pose_path}")
-
-    # Flagging bad poses, was 0.05
     if num_inliers_pose < 50 or ratio_pose < 0.1:
-        print("[POSE][WARN] Very few inliers – pose may be unreliable")
+        print(f"[POSE][WARN] Pose invalid: inliers {num_inliers_pose}/{num_considered} ({ratio_pose:.2f}) -> skipping")
+        return None, None, K, None, num_inliers_pose, ratio_pose
 
     print("[POSE] Rotation R:\n", R)
     print("[POSE] Translation t^T\n", t.T)
@@ -151,9 +141,6 @@ def pose_estimate(pts1,
     )
 
     return R, t, K, maskPose, num_inliers_pose, ratio_pose
-
-#  maskE comes from findEssentialMatrix, RANSAC: use me
-#  num_inliers_pose is from recoverPose
 
 if __name__ == "__main__":
     print('Run from pipeline.py')

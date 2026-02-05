@@ -31,6 +31,7 @@ from tests.pose_estimation_eval import (
     )
 from keyframe_selection.keyframe_selec import Map, Edge, print_map
 from keyframe_selection.keyframe_helpers import make_T, kps_to_xy
+from pose_estimation.PnP import pnp_tracking
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
@@ -101,8 +102,15 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
     pts1 = tracking_entry["pts1"]
     pts2 = tracking_entry["pts2"]
 
-    print(f"\n=== STAGE 2: POSE ESTIMATION ({pair_id})===")
-    R, t, K, mask, num_inliers, ratio = pose_estimate(pts1, pts2)
+    print(f"\n=== STAGE 2: POSE ESTIMATION ({pair_id}) ===")
+    result = pose_estimate(pts1, pts2)
+
+    # Handle skipped pairs
+    if result[0] is None:
+        print(f"[PIPE] Skipping pair {pair_id} due to low parallax or pose estimation failure")
+        return None, None, None, None, 0, 0.0, None, None
+
+    R, t, K, mask, num_inliers, ratio = result
 
     if pose_store is not None:
         pose_store[pair_id] = {
@@ -189,10 +197,10 @@ def stage_visualise(points_file):
 
 
 def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean):
-    if num_inliers < 80: return False
+    #   if num_inliers < 80: return False
     if inlier_ratio < 0.4: return False
     if reproj_mean > 1.5: return False
-    #   if num_3d_points < 50: return False     # alr checking for in triangulation
+    #   if num_3d_points < 25 : return False     # alr checking for in triangulation
     return True
 
 
@@ -317,8 +325,7 @@ if __name__ == "__main__":
     init_kf0_id = None
     init_kf1_id = None
 
-    #   (len(image_files) - 1):
-    for i in range(10 - 1):
+    for i in range(10 - 1):    # len(image_files) - 1
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -330,6 +337,9 @@ if __name__ == "__main__":
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
         R, t, K, mask, num_inliers, inlier_ratio, rot_err, dir_err = stage_pose(tracking_entry, pose_results, img1, img2)
+
+        if R is None:  # Skip pairs with low parallax
+            continue
 
         pose_entry = pose_results[pair_id]
         if i == 2:
@@ -346,9 +356,9 @@ if __name__ == "__main__":
                 des2=tracking_entry.get("des2", None),
             )
             print(f"[MAP] Initialized with (frame {i}) and (frame {i+1})")
-            # print current map state CHECKS BELOW
             if False:
-                print_map(slam_map)          
+                print_map(slam_map)
+
         ransac_ratios.append(inlier_ratio)  # for report
         if rot_err is not None:
             rot_errors.append(rot_err)
@@ -390,11 +400,10 @@ if __name__ == "__main__":
     print_stats("Mean reprojection error [px]", tri_errors, want_min=True)
     print("\n===================================================\n")
 
-    """
+ 
     global_points = stage_align_pc(pose_results, points_results)
-    if True:
+    if False:
         visualize_points(points_file="global_points.npy")
     else:
         save_global_points(global_points)
     print("\n[PIPE] Done processing all image pairs.")
-    """

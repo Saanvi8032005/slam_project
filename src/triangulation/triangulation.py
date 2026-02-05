@@ -90,7 +90,7 @@ def triangulate_from_data(
 
     print(f"[TRI] Initial correspondences: {pts1.shape[0]}")
 
-    MIN_INLIERS = 25  # or 50, tune this
+    MIN_INLIERS = 25
 
     if mask is not None:
         m = mask.ravel().astype(bool)
