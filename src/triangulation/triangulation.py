@@ -77,8 +77,8 @@ def triangulate_from_data(
         everything.
     """
 
-    pts1 = np.asarray(pts1, dtype=np.float32)
-    pts2 = np.asarray(pts2, dtype=np.float32)
+    pts1 = np.asarray(pts1, dtype=np.float32).reshape(-1, 2)
+    pts2 = np.asarray(pts2, dtype=np.float32).reshape(-1, 2)
     R = np.asarray(R, dtype=np.float64).reshape(3, 3)
     t = np.asarray(t, dtype=np.float64).reshape(3, 1)
     K = np.asarray(K, dtype=np.float64).reshape(3, 3)

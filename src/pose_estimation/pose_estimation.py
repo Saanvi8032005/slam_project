@@ -57,7 +57,7 @@ def load_calibration():
 def pose_estimate(pts1, pts2, log_err: bool | None = None):
     """
     Estimate relative pose (R, t) between two views using matched points.
-    Includes parallax gating to skip low-parallax pairs.
+    Includes parallax gating, Essential matrix rank check, and cheirality check.
 
     Parameters
     ----------
@@ -109,19 +109,28 @@ def pose_estimate(pts1, pts2, log_err: bool | None = None):
         threshold=0.75  # Increased threshold for RANSAC
     )
     if E is None:
-        raise RuntimeError("Essential matrix estimation failed")
+        raise RuntimeError("[POSE] Essential matrix estimation failed")
 
-    mask_ransac = maskE.copy()
-    maskE_bool = mask_ransac.ravel().astype(bool)
-    num_inliers_E = maskE_bool.sum()
-    ratio_E = num_inliers_E / len(maskE_bool)
-    print(f"[POSE] RANSAC inliers (findEssentialMat): "
-          f"{num_inliers_E}/{len(maskE_bool)} ({ratio_E:.2f})")
+    # Check if E is of rank 2
+    U, S, Vt = np.linalg.svd(E)
+    if np.linalg.matrix_rank(E) != 2:
+        print("[POSE][WARN] Essential matrix is not rank 2, enforcing rank 2 constraint")
+        S[2] = 0  # Set the smallest singular value to 0
+        E = U @ np.diag(S) @ Vt
+
+    # Use inliers from RANSAC for pose recovery
+    pts1_inliers = pts1[maskE.ravel() == 1]
+    pts2_inliers = pts2[maskE.ravel() == 1]
 
     # Recover pose
-    n_inliers, R, t, maskPose = cv.recoverPose(E, pts1, pts2, K, mask=maskE)
+    n_inliers, R, t, maskPose = cv.recoverPose(E, pts1_inliers, pts2_inliers, K)
     t = t.reshape(3, 1)
     t /= (np.linalg.norm(t) + 1e-12)
+
+    # Check if R is a valid rotation matrix
+    if not (np.allclose(np.dot(R.T, R), np.eye(3), atol=1e-6) and np.isclose(np.linalg.det(R), 1.0)):
+        print("[POSE][ERROR] Recovered R is not a valid rotation matrix")
+        return None, None, K, None, 0, 0.0
 
     # Debugging: Check inliers after recoverPose
     maskPose_bool = maskPose.ravel().astype(bool)
@@ -140,7 +149,10 @@ def pose_estimate(pts1, pts2, log_err: bool | None = None):
         f"{num_inliers_pose}/{num_considered} ({ratio_pose:.2f})"
     )
 
-    return R, t, K, maskPose, num_inliers_pose, ratio_pose
+    pts1_final = pts1_inliers[maskPose_bool]
+    pts2_final = pts2_inliers[maskPose_bool]   
+
+    return R, t, K, num_inliers_pose, ratio_pose, pts1_final, pts2_final
 
 if __name__ == "__main__":
     print('Run from pipeline.py')

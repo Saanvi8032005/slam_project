@@ -108,9 +108,9 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
     # Handle skipped pairs
     if result[0] is None:
         print(f"[PIPE] Skipping pair {pair_id} due to low parallax or pose estimation failure")
-        return None, None, None, None, 0, 0.0, None, None
+        return None, None, None, 0, 0.0, None, None, None, None
 
-    R, t, K, mask, num_inliers, ratio = result
+    R, t, K, num_inliers, ratio, pts1, pts2 = result
 
     if pose_store is not None:
         pose_store[pair_id] = {
@@ -118,7 +118,8 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
             "R": R,
             "t": t,
             "K": K,
-            "mask": mask,
+            "pts1": pts1,
+            "pts2": pts2,
         }
 
     error_print = True
@@ -138,7 +139,7 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
         print(f"[POSE][GT] Rotation error:            {rot_err:.3f} deg")
         print(f"[POSE][GT] Translation direction err: {dir_err:.3f} deg")
 
-    return R, t, K, mask, num_inliers, ratio, rot_err, dir_err
+    return R, t, K, num_inliers, ratio, rot_err, dir_err, pts1, pts2
 
 
 def stage_triangulate(tracking_entry, pose_entry, points_store=None):
@@ -153,22 +154,24 @@ def stage_triangulate(tracking_entry, pose_entry, points_store=None):
 
     pair_id = tracking_entry["pair_id"]
 
-    pts1 = tracking_entry["pts1"]
-    pts2 = tracking_entry["pts2"]
+    # Extract matched points and pose data
+    pts1 = pose_entry["pts1"]
+    pts2 = pose_entry["pts2"]
     R = pose_entry["R"]
     t = pose_entry["t"]
     K = pose_entry["K"]
-    mask = pose_entry.get("mask", None)
 
+    # Call triangulation function
     pts3D, err_mean = triangulate_from_data(
         pts1,
         pts2,
         R,
         t,
         K,
-        mask=mask,
+        mask=None,
         out_name=f"points_{pair_id}.npy",
     )
+
     if pts3D.shape[0] == 0:
         print(f"[PIPE] Skipping pair {pair_id} due to empty triangulation")
     if points_store is not None:
@@ -198,8 +201,8 @@ def stage_visualise(points_file):
 
 def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean):
     #   if num_inliers < 80: return False
-    if inlier_ratio < 0.4: return False
-    if reproj_mean > 1.5: return False
+    #   if inlier_ratio < 0.4: return False
+    #   if reproj_mean > 1.5: return False
     #   if num_3d_points < 25 : return False     # alr checking for in triangulation
     return True
 
@@ -325,7 +328,7 @@ if __name__ == "__main__":
     init_kf0_id = None
     init_kf1_id = None
 
-    for i in range(10 - 1):    # len(image_files) - 1
+    for i in range(len(image_files) - 1):    # len(image_files) - 1
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -336,7 +339,7 @@ if __name__ == "__main__":
         img2 = image_files[i + 1]
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
-        R, t, K, mask, num_inliers, inlier_ratio, rot_err, dir_err = stage_pose(tracking_entry, pose_results, img1, img2)
+        R, t, K, num_inliers, inlier_ratio, rot_err, dir_err, _, _ = stage_pose(tracking_entry, pose_results, img1, img2)
 
         if R is None:  # Skip pairs with low parallax
             continue
