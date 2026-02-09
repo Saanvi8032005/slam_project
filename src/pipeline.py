@@ -29,8 +29,11 @@ from tests.pose_estimation_eval import (
         translation_direction_error_deg,
         GT_PATH,
     )
-from keyframe_selection.keyframe_selec import Map, Edge, print_map
-from keyframe_selection.keyframe_helpers import make_T, kps_to_xy
+from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
+from keyframe_selection.keyframe_helpers import (
+    initialize_map,  # Fixed function name
+    add_map_edge,
+)
 from pose_estimation.PnP import pnp_tracking
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
@@ -200,9 +203,9 @@ def stage_visualise(points_file):
 
 
 def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean):
-    #   if num_inliers < 80: return False
-    #   if inlier_ratio < 0.4: return False
-    #   if reproj_mean > 1.5: return False
+    if num_inliers < 80: return False
+    if inlier_ratio < 0.4: return False
+    if reproj_mean > 1.5: return False
     #   if num_3d_points < 25 : return False     # alr checking for in triangulation
     return True
 
@@ -262,54 +265,6 @@ def histogram(rot_err_arr):
     print(f"Number of catastrophic failures (≥10°): {num_big}")
 
 
-def initialize_map(
-    slam_map,
-    frame_id0: int,
-    frame_id1: int,
-    K: np.ndarray,
-    R: np.ndarray,
-    t: np.ndarray,
-    kp1,
-    kp2,
-    des1=None,
-    des2=None,
-):
-    """
-    Initialise pose-graph map with two keyframes and one odometry edge.
-
-    Conventions:
-      - Keyframe stores T_cw (world -> camera)
-      - recoverPose returns motion cam0 -> cam1, so T_rel = make_T(R,t)
-      - Set world frame = camera(frame_id0) at init => T_cw0 = I, T_cw1 = T_rel
-    """
-    T_rel = make_T(R, t)       # cam(frame_id0) -> cam(frame_id1)
-    T_cw0 = np.eye(4)
-    T_cw1 = T_rel @ T_cw0      # = T_rel
-
-    kf0 = slam_map.create_keyframe(
-        frame_id=frame_id0,
-        T_cw=T_cw0,
-        K=K,
-        kps=kps_to_xy(kp1),
-        des=des1
-    )
-
-    kf1 = slam_map.create_keyframe(
-        frame_id=frame_id1,
-        T_cw=T_cw1,
-        K=K,
-        kps=kps_to_xy(kp2),
-        des=des2
-    )
-
-    slam_map.add_edge(
-        Edge(kf_i=kf0.kf_id, kf_j=kf1.kf_id, T_ij=T_rel, edge_type="odometry")
-    )
-
-    print(f"[MAP] Initialised: KF{kf0.kf_id} (frame {frame_id0}) -> KF{kf1.kf_id} (frame {frame_id1})")
-    return kf0.kf_id, kf1.kf_id
-
-
 if __name__ == "__main__":
 
     image_files = load_image_files()
@@ -327,6 +282,7 @@ if __name__ == "__main__":
     is_initialized = False
     init_kf0_id = None
     init_kf1_id = None
+    last_kf_id = None
 
     for i in range(len(image_files) - 1):    # len(image_files) - 1
         print("\n" + "="*200)
@@ -345,22 +301,6 @@ if __name__ == "__main__":
             continue
 
         pose_entry = pose_results[pair_id]
-        if i == 2:
-            init_kf0_id, init_kf1_id = initialize_map(
-                slam_map=slam_map,
-                frame_id0=i,
-                frame_id1=i+1,
-                K=K,
-                R=R,
-                t=t,
-                kp1=tracking_entry["kp1"],
-                kp2=tracking_entry["kp2"],
-                des1=tracking_entry.get("des1", None),
-                des2=tracking_entry.get("des2", None),
-            )
-            print(f"[MAP] Initialized with (frame {i}) and (frame {i+1})")
-            if False:
-                print_map(slam_map)
 
         ransac_ratios.append(inlier_ratio)  # for report
         if rot_err is not None:
@@ -377,19 +317,45 @@ if __name__ == "__main__":
 
         if is_good_keyframe(num_inliers, inlier_ratio, err_mean) and pts3D.shape[0] > 0:
             print(f"[KF] Accepting keyframe {pair_id}")
-            # keep pose_results[pair_id] and points_results[pair_id] as they are
             tracking_acceptance += 1
-                # create first keyframe from img1 only once
-            if err_mean == 1:
-                tracking_acceptance -= 1  # don't count empty triangulations
+
+            if not is_initialized:
+                # Initialize map with the first good pair
+                init_kf0_id, init_kf1_id = initialize_map(
+                    slam_map=slam_map,
+                    frame_id0=i,
+                    frame_id1=i + 1,
+                    K=K,
+                    R=R,
+                    t=t,
+                    kp1=tracking_entry["kp1"],
+                    kp2=tracking_entry["kp2"],
+                    des1=tracking_entry.get("des1", None),
+                    des2=tracking_entry.get("des2", None),
+                )
+                is_initialized = True
+                last_kf_id = init_kf1_id
+            else:
+                # Add odometry edge and insert KF_{i+1} with chained pose
+                kf_j_id = add_map_edge(
+                    slam_map=slam_map,
+                    kf_i_id=last_kf_id,
+                    frame_j=i + 1,
+                    R=R,
+                    t=t,
+                    kp_j=tracking_entry["kp2"],
+                    des_j=tracking_entry.get("des2", None),
+                    K=K,
+                )
+                if kf_j_id is not None:
+                    last_kf_id = kf_j_id
+
         else:
             print(f"[KF] Rejecting keyframe {pair_id} (low quality)")
-            # remove this pair from the pose / points stores so it doesn't go into map/alignment
             pose_results.pop(pair_id, None)
             points_results.pop(pair_id, None)
 
     print(tracking_acceptance, "keyframes accepted out of", len(tracking_results))
-
 
     print("\n================ GLOBAL POSE STATS ================\n")
     print_stats("RANSAC inlier ratio", ransac_ratios, want_min=True)
@@ -403,10 +369,11 @@ if __name__ == "__main__":
     print_stats("Mean reprojection error [px]", tri_errors, want_min=True)
     print("\n===================================================\n")
 
- 
     global_points = stage_align_pc(pose_results, points_results)
     if False:
         visualize_points(points_file="global_points.npy")
     else:
         save_global_points(global_points)
     print("\n[PIPE] Done processing all image pairs.")
+
+    print_map(slam_map)

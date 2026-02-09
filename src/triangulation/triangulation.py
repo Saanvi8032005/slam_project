@@ -158,6 +158,11 @@ def triangulate_from_data(
     pts2 = pts2[mask_d]
 
     print(f"[TRI] Triangulated {pts3D.shape[0]} filtered 3D points")
+    if True:
+        print(f"[TRI] Raw triangulated points: {pts4D.shape[1]}")
+        print(f"[TRI] After w-filter: {mask_w.sum()}")
+        print(f"[TRI] After z>0 filter: {mask_z.sum()}")
+        print(f"[TRI] After distance filter: {mask_d.sum()}")
 
     if save_file:
         out_name = out_name or "points.npy"

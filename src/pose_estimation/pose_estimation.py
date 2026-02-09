@@ -93,8 +93,8 @@ def pose_estimate(pts1, pts2, log_err: bool | None = None):
         return None, None, K, None, 0, 0.0
 
     # Undistort points
-    pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
-    pts2 = cv.undistortPoints(pts2.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
+    #   pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
+    #   pts2 = cv.undistortPoints(pts2.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
 
     if pts1.shape[0] == 0 or pts2.shape[0] == 0:
         raise ValueError("[POSE] No points provided for pose estimation")
@@ -138,16 +138,25 @@ def pose_estimate(pts1, pts2, log_err: bool | None = None):
     num_considered = len(maskPose_bool)
     ratio_pose = num_inliers_pose / max(num_considered, 1)
 
+    # Essential matrix inliers (count, not sum of values)
+    E_inliers = (maskE.ravel() > 0).sum()
+    total_matches = len(pts1)
+
     if num_inliers_pose < 50 or ratio_pose < 0.1:
         print(f"[POSE][WARN] Pose invalid: inliers {num_inliers_pose}/{num_considered} ({ratio_pose:.2f}) -> skipping")
         return None, None, K, None, num_inliers_pose, ratio_pose
 
+    # Cheirality (physical validity) gate
+    cheirality_ratio = num_inliers_pose / max(E_inliers, 1)
+    if cheirality_ratio < 0.2:
+        print("[POSE][WARN] Weak cheirality; skipping pose")
+        return None, None, K, None, num_inliers_pose, ratio_pose
+    
     print("[POSE] Rotation R:\n", R)
     print("[POSE] Translation t^T\n", t.T)
-    print(
-        f"[POSE] Inliers after recoverPose: "
-        f"{num_inliers_pose}/{num_considered} ({ratio_pose:.2f})"
-    )
+    print(f"[POSE] E inliers: {E_inliers}/{total_matches} ({E_inliers/max(total_matches,1):.2f})")
+    print(f"[POSE] Pose inliers: {num_inliers_pose}/{E_inliers} ({num_inliers_pose/max(E_inliers,1):.2f})")
+
 
     pts1_final = pts1_inliers[maskPose_bool]
     pts2_final = pts2_inliers[maskPose_bool]   

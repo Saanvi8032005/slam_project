@@ -21,7 +21,7 @@ class Keyframe:
         descriptors (Optional[np.ndarray]): Feature descriptors for the keypoints (N, D).
         is_loop_candidate (bool): Indicates if the keyframe is a loop closure candidate.
     """
-    kf_id: int
+    kf_id: Optional[int]  # Assigned when added to the map
     frame_id: int
     T_cw: np.ndarray          # (4,4)
     K: np.ndarray             # (3,3)
@@ -63,19 +63,31 @@ class Map:
         self.edges: List[Edge] = []
         self._next_kf_id = 0
 
-    def add_keyframe(self, kf: Keyframe) -> None:
+    def add_keyframe(self, kf: Keyframe) -> int:
         """
         Adds a new keyframe to the map.
 
         Args:
             kf (Keyframe): The keyframe to add.
 
+        Returns:
+            int: The ID of the added keyframe.
+
         Raises:
             ValueError: If a keyframe with the same ID already exists.
         """
-        if kf.kf_id in self.keyframes:
-            raise ValueError(f"Keyframe id {kf.kf_id} already exists")
-        self.keyframes[kf.kf_id] = kf
+        if kf.kf_id is not None:
+            raise ValueError(
+                f"Keyframe already has kf_id={kf.kf_id}. "
+                "Set kf_id=None and let Map assign it."
+            )
+
+        new_id = self._next_kf_id
+        self._next_kf_id += 1
+
+        kf.kf_id = new_id
+        self.keyframes[new_id] = kf
+        return new_id
 
     def add_edge(self, edge: Edge) -> None:
         """
@@ -91,44 +103,18 @@ class Map:
             raise ValueError(f"Cannot add edge: Keyframes {edge.kf_i} or {edge.kf_j} do not exist in the map.")
         self.edges.append(edge)
 
-    def create_keyframe(self,
-                        frame_id: int,
-                        T_cw: np.ndarray,
-                        K: np.ndarray,
-                        kps: np.ndarray,
-                        des: Optional[np.ndarray]) -> Keyframe:
-        """
-        Creates a new keyframe and adds it to the map.
+    def remove_keyframe(self, kf_id: int) -> None:
+        if kf_id not in self.keyframes:
+            raise KeyError(f"Keyframe {kf_id} does not exist")
 
-        Args:
-            frame_id (int): Frame ID from the input data.
-            T_cw (np.ndarray): Transformation matrix (4x4) from world to camera coordinates.
-            K (np.ndarray): Camera intrinsic matrix (3x3).
-            kps (np.ndarray): 2D coordinates of keypoints in the image (N, 2).
-            des (Optional[np.ndarray]): Feature descriptors for the keypoints (N, D).
+        # Remove edges connected to this keyframe
+        self.edges = [
+            e for e in self.edges
+            if e.kf_i != kf_id and e.kf_j != kf_id
+        ]
 
-        Returns:
-            Keyframe: The created keyframe.
-
-        Raises:
-            ValueError: If the shape of T_cw or K is invalid.
-        """
-        if T_cw.shape != (4, 4):
-            raise ValueError("T_cw must be a 4x4 matrix.")
-        if K.shape != (3, 3):
-            raise ValueError("K must be a 3x3 matrix.")
-
-        kf = Keyframe(
-            kf_id=self._next_kf_id,
-            frame_id=frame_id,
-            T_cw=T_cw,
-            K=K,
-            keypoints_xy=kps,
-            descriptors=des
-        )
-        self.add_keyframe(kf)
-        self._next_kf_id += 1
-        return kf
+        # Remove keyframe
+        del self.keyframes[kf_id]
 
 
 def print_map(slam_map):
@@ -137,18 +123,18 @@ def print_map(slam_map):
     print(f"Num keyframes: {len(slam_map.keyframes)}")
     print(f"Num edges:     {len(slam_map.edges)}")
 
-    print("\nKeyframes:")
-    for kf_id, kf in slam_map.keyframes.items():
-        print(f"  KF{kf_id}: frame_id={kf.frame_id}")
-        print(f"    T_cw:\n{kf.T_cw}")
+    if False:
+        print("\nKeyframes:")
+        for kf_id, kf in slam_map.keyframes.items():
+            print(f"  KF{kf_id}: frame_id={kf.frame_id}")
+            print(f"    T_cw:\n{kf.T_cw}")
 
-    print("\nEdges:")
-    for e in slam_map.edges:
-        print(
-            f"  Edge {e.kf_i} -> {e.kf_j} "
-            f"type={e.edge_type} weight={e.weight}"
-        )
-        print(f"    T_ij:\n{e.T_ij}")
+        print("\nEdges:")
+        for e in slam_map.edges:
+            print(
+                f"  Edge {e.kf_i} -> {e.kf_j} "
+                f"type={e.edge_type} weight={e.weight}"
+            )
+            print(f"    T_ij:\n{e.T_ij}")
 
     print("===========================================\n")
-
