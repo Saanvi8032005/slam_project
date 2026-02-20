@@ -165,7 +165,7 @@ if __name__ == "__main__":
                 return_data=True,
                 out_name=None,
                 )
-        """      
+        """
         pts1_line, pts2_line = lsd(img1_path, img2_path)
         pts1 = np.vstack([
             np.float32(pts1).reshape(-1, 2),

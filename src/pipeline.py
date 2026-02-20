@@ -34,7 +34,8 @@ from keyframe_selection.keyframe_helpers import (
     initialize_map,  # Fixed function name
     add_map_edge,
 )
-from pose_estimation.PnP import pnp_tracking
+from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
+from utils.trajectory_utils import save_estimated_trajectory
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
@@ -370,10 +371,16 @@ if __name__ == "__main__":
     print("\n===================================================\n")
 
     global_points = stage_align_pc(pose_results, points_results)
-    if False:
+    if True:
         visualize_points(points_file="global_points.npy")
     else:
         save_global_points(global_points)
     print("\n[PIPE] Done processing all image pairs.")
 
     print_map(slam_map)
+    optimise_pose_graph(slam_map, max_nfev=50, robust=True, verbose=2)  # Set verbosity level
+    print_map(slam_map)
+
+    # Save the estimated trajectory
+    estimated_trajectory_file = PROJECT_ROOT / "outputs" / "tests" / "tests.txt"
+    save_estimated_trajectory(slam_map, image_files, estimated_trajectory_file)
