@@ -8,6 +8,13 @@ import numpy as np
 
 
 @dataclass
+class MapPoint:
+    mp_id: int
+    xyz: np.ndarray      # (3,)
+    observations: Dict[int, int]  # keyframe_id -> keypoint_index
+
+
+@dataclass
 class Keyframe:
     """
     Represents a keyframe in the SLAM system.
