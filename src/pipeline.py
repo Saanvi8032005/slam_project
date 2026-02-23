@@ -266,6 +266,64 @@ def histogram(rot_err_arr):
     print(f"Number of catastrophic failures (≥10°): {num_big}")
 
 
+def initialize_map(slam_map, frame_id0, frame_id1, K, R, t, kp1, kp2, des1, des2):
+    """
+    Initialize the SLAM map with the first two keyframes and their 3D points.
+
+    Args:
+        slam_map (Map): The SLAM map to initialize.
+        frame_id0, frame_id1 (int): Frame IDs of the first two keyframes.
+        K (np.ndarray): Camera intrinsic matrix.
+        R (np.ndarray): Rotation matrix between the two frames.
+        t (np.ndarray): Translation vector between the two frames.
+        kp1, kp2 (list[cv.KeyPoint]): Keypoints in the two frames.
+        des1, des2 (np.ndarray): Descriptors for the keypoints in the two frames.
+
+    Returns:
+        Tuple[int, int]: IDs of the two initialized keyframes.
+    """
+    # Create the first keyframe
+    kf0 = Keyframe(
+        kf_id=None,
+        frame_id=frame_id0,
+        T_cw=np.eye(4),
+        K=K,
+        keypoints_xy=np.array([kp.pt for kp in kp1], dtype=np.float32),
+        descriptors=des1,
+        kp_to_mp=[None] * len(kp1)
+    )
+    kf0_id = slam_map.add_keyframe(kf0)
+
+    # Create the second keyframe
+    T_cw1 = np.eye(4)
+    T_cw1[:3, :3] = R
+    T_cw1[:3, 3] = t.ravel()
+    kf1 = Keyframe(
+        kf_id=None,
+        frame_id=frame_id1,
+        T_cw=T_cw1,
+        K=K,
+        keypoints_xy=np.array([kp.pt for kp in kp2], dtype=np.float32),
+        descriptors=des2,
+        kp_to_mp=[None] * len(kp2)
+    )
+    kf1_id = slam_map.add_keyframe(kf1)
+
+    # Triangulate initial 3D points
+    pts1 = np.array([kp.pt for kp in kp1], dtype=np.float32)
+    pts2 = np.array([kp.pt for kp in kp2], dtype=np.float32)
+    pts3D, _ = triangulate_from_data(pts1, pts2, R, t, K)
+
+    # Add MapPoints to the map
+    for i, pt3D in enumerate(pts3D):
+        descriptor = des1[i]  # Use descriptor from the first keyframe
+        mp_id = slam_map.add_mappoint(pt3D, {kf0_id: i, kf1_id: i}, descriptor)
+        kf0.kp_to_mp[i] = mp_id
+        kf1.kp_to_mp[i] = mp_id
+
+    return kf0_id, kf1_id
+
+
 if __name__ == "__main__":
 
     image_files = load_image_files()
@@ -334,6 +392,7 @@ if __name__ == "__main__":
                     des1=tracking_entry.get("des1", None),
                     des2=tracking_entry.get("des2", None),
                 )
+                descriptor = kf_i.descriptors[kp_i]
                 is_initialized = True
                 last_kf_id = init_kf1_id
             else:
@@ -358,18 +417,6 @@ if __name__ == "__main__":
 
     print(tracking_acceptance, "keyframes accepted out of", len(tracking_results))
 
-    print("\n================ GLOBAL POSE STATS ================\n")
-    print_stats("RANSAC inlier ratio", ransac_ratios, want_min=True)
-    print_stats("Rotation error [deg]", rot_errors, want_min=False)
-    print_stats("Translation-direction error [deg]", trans_dir_errors, want_min=False)
-    print("\n===================================================\n")
-
-    histogram(tri_errors)
-    print("\n================ TRIANGULATION STATS ==============\n")
-    print_stats("Num 3D points per pair", tri_counts, want_min=True)
-    print_stats("Mean reprojection error [px]", tri_errors, want_min=True)
-    print("\n===================================================\n")
-
     global_points = stage_align_pc(pose_results, points_results)
     if False:
         visualize_points(points_file="global_points.npy")
@@ -384,3 +431,15 @@ if __name__ == "__main__":
     # Save the estimated trajectory
     estimated_trajectory_file = PROJECT_ROOT / "outputs" / "tests" / "tests.txt"
     save_estimated_trajectory(slam_map, image_files, estimated_trajectory_file)
+
+    print("\n================ GLOBAL POSE STATS ================\n")
+    print_stats("RANSAC inlier ratio", ransac_ratios, want_min=True)
+    print_stats("Rotation error [deg]", rot_errors, want_min=False)
+    print_stats("Translation-direction error [deg]", trans_dir_errors, want_min=False)
+    print("\n===================================================\n")
+
+    histogram(tri_errors)
+    print("\n================ TRIANGULATION STATS ==============\n")
+    print_stats("Num 3D points per pair", tri_counts, want_min=True)
+    print_stats("Mean reprojection error [px]", tri_errors, want_min=True)
+    print("\n===================================================\n")

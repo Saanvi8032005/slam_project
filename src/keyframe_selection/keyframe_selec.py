@@ -11,7 +11,31 @@ import numpy as np
 class MapPoint:
     mp_id: int
     xyz: np.ndarray      # (3,)
+    descriptor: np.ndarray             # ORB descriptor (32,)
     observations: Dict[int, int]  # keyframe_id -> keypoint_index
+
+
+class Map:
+    def __init__(self):
+        self.keyframes = {}
+        self.edges = []
+        self._next_kf_id = 0
+
+        self.mappoints: Dict[int, MapPoint] = {}
+        self._next_mp_id = 0
+
+    def add_mappoint(self,
+                     xyz: np.ndarray,
+                     descriptor: np.ndarray,
+                     observations: Dict[int, int]) -> int:
+        mp_id = self._next_mp_id
+        self._next_mp_id += 1
+        self.mappoints[mp_id] = MapPoint(
+            mp_id=mp_id,
+            xyz=xyz,
+            descriptor=descriptor,
+            observations=observations)
+        return mp_id
 
 
 @dataclass
@@ -35,6 +59,7 @@ class Keyframe:
     keypoints_xy: np.ndarray  # (N,2)
     descriptors: Optional[np.ndarray]  # (N,D) (can be None for now)
     is_loop_candidate: bool = False
+    kp_to_mp: List[Optional[int]] = None
 
 
 @dataclass

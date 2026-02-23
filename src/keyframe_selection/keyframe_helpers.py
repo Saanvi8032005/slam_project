@@ -1,5 +1,5 @@
 import numpy as np
-from .keyframe_selec import Keyframe, Edge
+from .keyframe_selec import Keyframe, Edge, MapPoint
 
 
 def make_T(R, t):
@@ -54,6 +54,7 @@ def insert_keyframe(
         K=K,
         keypoints_xy=keypoints_xy,
         descriptors=descriptors,
+        kp_to_mp=[None] * len(keypoints_xy), 
     )
 
     kf_id = slam_map.add_keyframe(kf)
@@ -203,3 +204,49 @@ def add_map_edge(
     slam_map.add_edge(Edge(kf_i=kf_i_id, kf_j=kf_j_id, T_ij=T_rel, edge_type="odometry"))
     print(f"[MAP] Added odometry edge KF{kf_i_id} -> KF{kf_j_id}")
     return kf_j_id
+
+
+def create_mappoints_from_triangulation(
+    slam_map,
+    kf_i_id: int,
+    kf_j_id: int,
+    pts3D: np.ndarray,       # (N,3)
+    idx_i: np.ndarray,       # (N,)
+    idx_j: np.ndarray,       # (N,)
+):
+    """
+    For each triangulated 3D point, create a MapPoint and attach it to:
+      - kf_i at kp index idx_i[k]
+      - kf_j at kp index idx_j[k]
+    """
+    kf_i = slam_map.keyframes[kf_i_id]
+    kf_j = slam_map.keyframes[kf_j_id]
+
+    assert pts3D.shape[0] == idx_i.shape[0] == idx_j.shape[0]
+
+    created = 0
+    for X, kp_i, kp_j in zip(pts3D, idx_i, idx_j):
+
+        # skip if either keypoint already has a mappoint
+        if kf_i.kp_to_mp[kp_i] is not None:
+            continue
+        if kf_j.kp_to_mp[kp_j] is not None:
+            continue
+            
+        descriptor = kf_i.descriptors[kp_i]
+
+        mp_id = slam_map.add_mappoint(
+            xyz=X.astype(np.float64),
+            descriptor=descriptor,
+            observations={
+                kf_i_id: int(kp_i),
+                kf_j_id: int(kp_j)
+            },
+        )
+
+        kf_i.kp_to_mp[kp_i] = mp_id
+        kf_j.kp_to_mp[kp_j] = mp_id
+        created += 1
+
+    print(f"[MAP] Created {created} new MapPoints from triangulation")
+    return created
