@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import sys
 import matplotlib.pyplot as plt
+import cv2 as cv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +34,9 @@ from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
 from keyframe_selection.keyframe_helpers import (
     initialize_map,  # Fixed function name
     add_map_edge,
+    run_pnp_for_frame,
+    create_mappoints_from_triangulation,
+    run_pnp_for_frame2
 )
 from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
 from utils.trajectory_utils import save_estimated_trajectory
@@ -64,7 +68,7 @@ def stage_tracking(img1, img2, pair_id, tracking_results):
     print(f"\n=== STAGE 1: TRACKING / MATCHING ({pair_id}) ===")
 
     out_file = f"matches_{pair_id}.npz"
-    pts1, pts2, kp1, kp2, matches = matching(
+    pts1, pts2, kp1, kp2, matches, des1, des2 = matching(
              matcher=MATCHER,
              filter_method=FILTER,
              img1_path=img1,
@@ -75,17 +79,10 @@ def stage_tracking(img1, img2, pair_id, tracking_results):
              out_name=out_file,
              )
 
-    #   pts1_line, pts2_line = lsd(img1, img2)
-    pts1_all = np.vstack([
-        np.float32(pts1).reshape(-1, 2),
-        #   np.float32(pts1_line).reshape(-1, 2)
-    ])
-
-    pts2_all = np.vstack([
-        np.float32(pts2).reshape(-1, 2),
-        #   np.float32(pts2_line).reshape(-1, 2)
-    ])
-
+    pts1_all = np.asarray(pts1, dtype=np.float32).reshape(-1, 2)
+    pts2_all = np.asarray(pts2, dtype=np.float32).reshape(-1, 2)
+    idx_i = np.array([m.queryIdx for m in matches], dtype=int)
+    idx_j = np.array([m.trainIdx for m in matches], dtype=int)
     entry = {
         "pair_id": pair_id,
         "img1": img1,
@@ -95,6 +92,10 @@ def stage_tracking(img1, img2, pair_id, tracking_results):
         "kp1": kp1,
         "kp2": kp2,
         "matches": matches,
+        "des1": des1,
+        "des2": des2,
+        "idx_i": idx_i,
+        "idx_j": idx_j,
     }
     tracking_results[pair_id] = entry
 
@@ -112,9 +113,9 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
     # Handle skipped pairs
     if result[0] is None:
         print(f"[PIPE] Skipping pair {pair_id} due to low parallax or pose estimation failure")
-        return None, None, None, 0, 0.0, None, None, None, None
+        return None, None, None, 0, 0.0, None, None, None, None, None
 
-    R, t, K, num_inliers, ratio, pts1, pts2 = result
+    R, t, K, num_inliers, ratio, pts1, pts2, mask = result
 
     if pose_store is not None:
         pose_store[pair_id] = {
@@ -124,6 +125,7 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
             "K": K,
             "pts1": pts1,
             "pts2": pts2,
+            "mask": mask,
         }
 
     error_print = True
@@ -143,7 +145,8 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
         print(f"[POSE][GT] Rotation error:            {rot_err:.3f} deg")
         print(f"[POSE][GT] Translation direction err: {dir_err:.3f} deg")
 
-    return R, t, K, num_inliers, ratio, rot_err, dir_err, pts1, pts2
+    # should just return pose_store tbh
+    return R, t, K, num_inliers, ratio, rot_err, dir_err, pts1, pts2, mask
 
 
 def stage_triangulate(tracking_entry, pose_entry, points_store=None):
@@ -266,64 +269,6 @@ def histogram(rot_err_arr):
     print(f"Number of catastrophic failures (≥10°): {num_big}")
 
 
-def initialize_map(slam_map, frame_id0, frame_id1, K, R, t, kp1, kp2, des1, des2):
-    """
-    Initialize the SLAM map with the first two keyframes and their 3D points.
-
-    Args:
-        slam_map (Map): The SLAM map to initialize.
-        frame_id0, frame_id1 (int): Frame IDs of the first two keyframes.
-        K (np.ndarray): Camera intrinsic matrix.
-        R (np.ndarray): Rotation matrix between the two frames.
-        t (np.ndarray): Translation vector between the two frames.
-        kp1, kp2 (list[cv.KeyPoint]): Keypoints in the two frames.
-        des1, des2 (np.ndarray): Descriptors for the keypoints in the two frames.
-
-    Returns:
-        Tuple[int, int]: IDs of the two initialized keyframes.
-    """
-    # Create the first keyframe
-    kf0 = Keyframe(
-        kf_id=None,
-        frame_id=frame_id0,
-        T_cw=np.eye(4),
-        K=K,
-        keypoints_xy=np.array([kp.pt for kp in kp1], dtype=np.float32),
-        descriptors=des1,
-        kp_to_mp=[None] * len(kp1)
-    )
-    kf0_id = slam_map.add_keyframe(kf0)
-
-    # Create the second keyframe
-    T_cw1 = np.eye(4)
-    T_cw1[:3, :3] = R
-    T_cw1[:3, 3] = t.ravel()
-    kf1 = Keyframe(
-        kf_id=None,
-        frame_id=frame_id1,
-        T_cw=T_cw1,
-        K=K,
-        keypoints_xy=np.array([kp.pt for kp in kp2], dtype=np.float32),
-        descriptors=des2,
-        kp_to_mp=[None] * len(kp2)
-    )
-    kf1_id = slam_map.add_keyframe(kf1)
-
-    # Triangulate initial 3D points
-    pts1 = np.array([kp.pt for kp in kp1], dtype=np.float32)
-    pts2 = np.array([kp.pt for kp in kp2], dtype=np.float32)
-    pts3D, _ = triangulate_from_data(pts1, pts2, R, t, K)
-
-    # Add MapPoints to the map
-    for i, pt3D in enumerate(pts3D):
-        descriptor = des1[i]  # Use descriptor from the first keyframe
-        mp_id = slam_map.add_mappoint(pt3D, {kf0_id: i, kf1_id: i}, descriptor)
-        kf0.kp_to_mp[i] = mp_id
-        kf1.kp_to_mp[i] = mp_id
-
-    return kf0_id, kf1_id
-
-
 if __name__ == "__main__":
 
     image_files = load_image_files()
@@ -342,8 +287,9 @@ if __name__ == "__main__":
     init_kf0_id = None
     init_kf1_id = None
     last_kf_id = None
+    fail_count = 0
 
-    for i in range(len(image_files) - 1):    # len(image_files) - 1
+    for i in range(20 - 1):    # len(image_files) - 1
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -354,68 +300,175 @@ if __name__ == "__main__":
         img2 = image_files[i + 1]
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
-        R, t, K, num_inliers, inlier_ratio, rot_err, dir_err, _, _ = stage_pose(tracking_entry, pose_results, img1, img2)
 
-        if R is None:  # Skip pairs with low parallax
+        if not is_initialized:
+            # --- essential init just to bootstrap map ---
+            R, t, K, num_inliers, inlier_ratio, rot_err, dir_err, pts1_f, pts2_f, inlier_mask = stage_pose(
+                tracking_entry, pose_results, img1, img2
+            )
+            if R is None:
+                continue
+
+            # Decide if good init pair
+            if num_inliers < 80 or inlier_ratio < 0.4:
+                print("[INIT] Not enough inliers for init")
+                continue
+
+            # --- Align inlier_mask with idx_i and idx_j ---
+            idx_i = tracking_entry["idx_i"]
+            idx_j = tracking_entry["idx_j"]
+
+            # Ensure inlier_mask is aligned with idx_i and idx_j
+            inlier_mask = inlier_mask[:len(idx_i)]
+
+            # Filter idx_i and idx_j using inlier_mask
+            idx_i_inl = idx_i[inlier_mask]
+            idx_j_inl = idx_j[inlier_mask]
+
+            # --- Use inlier pixel coords directly (aligned to same mask) ---
+            pts1_inl = tracking_entry["pts1"][inlier_mask]
+            pts2_inl = tracking_entry["pts2"][inlier_mask]
+
+            # --- Triangulate ONCE (from inliers only) ---
+            pts3D, reproj_mean = triangulate_from_data(
+                pts1_inl, pts2_inl, R, t, K, mask=None, out_name=None
+            )
+
+            if pts3D is None or pts3D.shape[0] == 0:
+                print("[INIT] Triangulation empty, skip init")
+                continue
+
+            if reproj_mean > 1.5:
+                print(f"[INIT] Reproj too high ({reproj_mean:.2f}), skip init")
+                continue
+
+            # --- Insert the two initial keyframes (poses chained from R,t) ---
+            init_kf0_id, init_kf1_id = initialize_map(
+                slam_map=slam_map,
+                frame_id0=i,
+                frame_id1=i + 1,
+                K=K,
+                R=R,
+                t=t,
+                kp1=tracking_entry["kp1"],
+                kp2=tracking_entry["kp2"],
+                des1=tracking_entry["des1"],
+                des2=tracking_entry["des2"],
+            )
+
+            # --- Seed MapPoints from triangulation ---
+            if pts3D.shape[0] != idx_i_inl.shape[0]:
+                print("[INIT][WARN] Triangulation output count != inlier count.")
+                print("-> Update triangulate_from_data to also return an 'active' mask.")
+                n = min(pts3D.shape[0], idx_i_inl.shape[0])
+                pts3D = pts3D[:n]
+                idx_i_inl = idx_i_inl[:n]
+                idx_j_inl = idx_j_inl[:n]
+
+            created = create_mappoints_from_triangulation(
+                slam_map=slam_map,
+                kf_i_id=init_kf0_id,
+                kf_j_id=init_kf1_id,
+                pts3D=pts3D,
+                idx_i=idx_i_inl,
+                idx_j=idx_j_inl,
+            )
+
+            print(f"[INIT] Seeded {created} MapPoints (reproj_mean={reproj_mean:.3f})")
+            print(f"[INIT] MapPoints after init: {len(slam_map.mappoints)}")
+
+            is_initialized = True
+            last_kf_id = init_kf1_id
+            tracking_acceptance += 1
             continue
 
-        pose_entry = pose_results[pair_id]
+        # ============================================================
+        # (B) TRACKING MODE: PnP instead of Essential
+        # ============================================================
+        # 1) Absolute pose from PnP (world->camera)
+        Tcw_cur, ninl, inlier_kp_to_mp = run_pnp_for_frame2(
+            slam_map=slam_map,
+            keypoints=tracking_entry["kp2"],
+            descriptors=tracking_entry["des2"],
+            K=K
+        )
 
-        ransac_ratios.append(inlier_ratio)  # for report
-        if rot_err is not None:
-            rot_errors.append(rot_err)
-        if dir_err is not None:
-            trans_dir_errors.append(dir_err)
+        if Tcw_cur is None:
+            print("[TRACK][PnP] Failed (not enough inliers / correspondences)")
+            # optional fallback to stage_pose() if wanted
+            fail_count += 1
+            continue
+        print(f"[TRACK][PnP] Inliers: {ninl}")
+
+        # 2) Keyframe decision (simple version)
+        #    can make this more sophisticated later (motion, time, parallax)
+        if ninl < 30:
+            # Track-only: pose exists but we don't insert a KF
+            continue
+
+        # 3) Convert absolute pose into relative edge from last keyframe
+        last_kf = slam_map.keyframes[last_kf_id]
+        Tcw_last = last_kf.T_cw
+
+        T_rel = Tcw_cur @ np.linalg.inv(Tcw_last)  # cam_last -> cam_cur
+        R_rel = T_rel[:3, :3]
+        t_rel = T_rel[:3, 3]
+
+        # 4) Insert keyframe + edge (uses your existing helper)
+        kf_j_id = add_map_edge(
+            slam_map=slam_map,
+            kf_i_id=last_kf_id,
+            frame_j=i + 1,
+            R=R_rel,
+            t=t_rel,
+            kp_j=tracking_entry["kp2"],
+            des_j=tracking_entry["des2"],
+            K=K,
+        )
+        if kf_j_id is None:
+            continue
+
+        # 5) Update kp_to_mp for the new KF using PnP inlier associations
+        kf_j = slam_map.keyframes[kf_j_id]
+        for kp_idx, mp_id in inlier_kp_to_mp.items():
+            kf_j.kp_to_mp[kp_idx] = mp_id
+            slam_map.mappoints[mp_id].observations[kf_j_id] = int(kp_idx)
+
+        # 6) TRIANGULATE NEW POINTS between last_kf and new_kf to grow map
+        #    Use matches from last_kf descriptors to current descriptors
+        bf = cv.BFMatcher(cv.NORM_HAMMING, crossCheck=True)
+        kf_matches = bf.match(last_kf.descriptors, kf_j.descriptors)
+
+        idx_i = np.array([m.queryIdx for m in kf_matches], dtype=int)
+        idx_j = np.array([m.trainIdx for m in kf_matches], dtype=int)
+
+        pts1 = np.array([last_kf.keypoints_xy[q] for q in idx_i], dtype=np.float32)
+        pts2 = np.array([kf_j.keypoints_xy[t_] for t_ in idx_j], dtype=np.float32)
+
+        # Relative pose for triangulation should be last->current
+        pts3D_new, reproj_mean = triangulate_from_data(
+            pts1, pts2, R_rel, t_rel, K, mask=None, out_name=None
+        )
+
+        if pts3D_new is not None and pts3D_new.shape[0] > 0:
+            created = create_mappoints_from_triangulation(
+                slam_map=slam_map,
+                kf_i_id=last_kf_id,
+                kf_j_id=kf_j_id,
+                pts3D=pts3D_new,
+                idx_i=idx_i,
+                idx_j=idx_j,
+            )
+            print(f"[MAP] Added {created} MapPoints (map now {len(slam_map.mappoints)})")
+
+        # 7) Advance last keyframe pointer
+        last_kf_id = kf_j_id
 
 
-        pts3D, err_mean = stage_triangulate(tracking_entry,
-                                            pose_entry,
-                                            points_store=points_results)
-        tri_counts.append(pts3D.shape[0])
-        tri_errors.append(err_mean)
 
-        if is_good_keyframe(num_inliers, inlier_ratio, err_mean) and pts3D.shape[0] > 0:
-            print(f"[KF] Accepting keyframe {pair_id}")
-            tracking_acceptance += 1
-
-            if not is_initialized:
-                # Initialize map with the first good pair
-                init_kf0_id, init_kf1_id = initialize_map(
-                    slam_map=slam_map,
-                    frame_id0=i,
-                    frame_id1=i + 1,
-                    K=K,
-                    R=R,
-                    t=t,
-                    kp1=tracking_entry["kp1"],
-                    kp2=tracking_entry["kp2"],
-                    des1=tracking_entry.get("des1", None),
-                    des2=tracking_entry.get("des2", None),
-                )
-                descriptor = kf_i.descriptors[kp_i]
-                is_initialized = True
-                last_kf_id = init_kf1_id
-            else:
-                # Add odometry edge and insert KF_{i+1} with chained pose
-                kf_j_id = add_map_edge(
-                    slam_map=slam_map,
-                    kf_i_id=last_kf_id,
-                    frame_j=i + 1,
-                    R=R,
-                    t=t,
-                    kp_j=tracking_entry["kp2"],
-                    des_j=tracking_entry.get("des2", None),
-                    K=K,
-                )
-                if kf_j_id is not None:
-                    last_kf_id = kf_j_id
-
-        else:
-            print(f"[KF] Rejecting keyframe {pair_id} (low quality)")
-            pose_results.pop(pair_id, None)
-            points_results.pop(pair_id, None)
 
     print(tracking_acceptance, "keyframes accepted out of", len(tracking_results))
+    print(fail_count, "pairs failed in PnP tracking stage")
 
     global_points = stage_align_pc(pose_results, points_results)
     if False:
@@ -431,6 +484,12 @@ if __name__ == "__main__":
     # Save the estimated trajectory
     estimated_trajectory_file = PROJECT_ROOT / "outputs" / "tests" / "tests.txt"
     save_estimated_trajectory(slam_map, image_files, estimated_trajectory_file)
+
+    ransac_ratios.append(inlier_ratio)  # for report
+    if rot_err is not None:
+        rot_errors.append(rot_err)
+    if dir_err is not None:
+        trans_dir_errors.append(dir_err)
 
     print("\n================ GLOBAL POSE STATS ================\n")
     print_stats("RANSAC inlier ratio", ransac_ratios, want_min=True)
