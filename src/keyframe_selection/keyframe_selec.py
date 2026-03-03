@@ -15,29 +15,6 @@ class MapPoint:
     observations: Dict[int, int]  # keyframe_id -> keypoint_index
 
 
-class Map:
-    def __init__(self):
-        self.keyframes = {}
-        self.edges = []
-        self._next_kf_id = 0
-
-        self.mappoints: Dict[int, MapPoint] = {}
-        self._next_mp_id = 0
-
-    def add_mappoint(self,
-                     xyz: np.ndarray,
-                     descriptor: np.ndarray,
-                     observations: Dict[int, int]) -> int:
-        mp_id = self._next_mp_id
-        self._next_mp_id += 1
-        self.mappoints[mp_id] = MapPoint(
-            mp_id=mp_id,
-            xyz=xyz,
-            descriptor=descriptor,
-            observations=observations)
-        return mp_id
-
-
 @dataclass
 class Keyframe:
     """
@@ -95,6 +72,9 @@ class Map:
         self.edges: List[Edge] = []
         self._next_kf_id = 0
 
+        self.mappoints = {}
+        self._next_mp_id = 0
+
     def add_keyframe(self, kf: Keyframe) -> int:
         """
         Adds a new keyframe to the map.
@@ -147,6 +127,19 @@ class Map:
 
         # Remove keyframe
         del self.keyframes[kf_id]
+
+    def add_mappoint(self,
+                     xyz: np.ndarray,
+                     descriptor: np.ndarray,
+                     observations: Dict[int, int]) -> int:
+        mp_id = self._next_mp_id
+        self._next_mp_id += 1
+        self.mappoints[mp_id] = MapPoint(
+            mp_id=mp_id,
+            xyz=xyz,
+            descriptor=descriptor,
+            observations=observations)
+        return mp_id
 
 
 def print_map(slam_map):
