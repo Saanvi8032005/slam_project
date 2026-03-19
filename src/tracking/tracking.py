@@ -239,7 +239,7 @@ def matching(matcher="flann",
         # Forward–backward error (how far we drift if we go 1->2->1)
         fb_err = np.linalg.norm(pts1_back_flat - pts1, axis=1)
 
-        # Thresholds (you can tune these)
+        # Thresholds (can tune these)
         fb_thresh = 1.0    # max allowed FB error in pixels
         err_thresh = 50.0  # max allowed LK photometric error
         max_disp = 25.0    # optional: reject crazy jumps vs descriptor match
@@ -272,6 +272,8 @@ def matching(matcher="flann",
         pts1 = pts1[valid]
         pts2 = pts2_fwd_flat[valid]
         good = [m for m, keep in zip(good, valid) if keep]
+        idx_i = np.array([m.queryIdx for m in good], dtype=int)  # Indices in image 1 (kp1/des1)
+        idx_j = np.array([m.trainIdx for m in good], dtype=int)  # Indices in image 2 (kp2/des2)
 
     if unit_test:
         # Visualise
@@ -290,7 +292,7 @@ def matching(matcher="flann",
         plt.show()
 
     if return_data:
-        return pts1, pts2, kp1, kp2, good
+        return pts1, pts2, kp1, kp2, good, idx_i, idx_j, des1, des2
 
 
 # -----------------------------------------------------------

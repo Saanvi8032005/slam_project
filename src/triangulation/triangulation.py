@@ -82,6 +82,8 @@ def triangulate_from_data(
     R = np.asarray(R, dtype=np.float64).reshape(3, 3)
     t = np.asarray(t, dtype=np.float64).reshape(3, 1)
     K = np.asarray(K, dtype=np.float64).reshape(3, 3)
+    N0 = pts1.shape[0]
+    keep_idx = np.arange(N0)
 
     # --- Basic sanity ---
     if pts1.shape != pts2.shape or pts1.shape[1] != 2:
@@ -103,6 +105,7 @@ def triangulate_from_data(
 
         pts1 = pts1[m]
         pts2 = pts2[m]
+        keep_idx = keep_idx[m]
 
     if pts1.shape[0] < 2:
         print("[TRI] Not enough points to triangulate, returning empty array")
@@ -131,6 +134,7 @@ def triangulate_from_data(
     pts1 = pts1[mask_w]
     pts2 = pts2[mask_w]
     w = w[mask_w]
+    keep_idx = keep_idx[mask_w]
 
     # Dehomogenise
     pts3D = (pts4D[:3] / w).T  # (N, 3)
@@ -143,6 +147,7 @@ def triangulate_from_data(
     pts3D = pts3D[mask_z]
     pts1 = pts1[mask_z]
     pts2 = pts2[mask_z]
+    keep_idx = keep_idx[mask_z]
 
     if pts3D.shape[0] == 0:
         print("[TRI] WARNING: no points left after z filtering")
@@ -156,6 +161,7 @@ def triangulate_from_data(
     pts3D = pts3D[mask_d]
     pts1 = pts1[mask_d]
     pts2 = pts2[mask_d]
+    keep_idx = keep_idx[mask_d]
 
     print(f"[TRI] Triangulated {pts3D.shape[0]} filtered 3D points")
     if True:
@@ -186,4 +192,4 @@ def triangulate_from_data(
         err_mean = max(mean1, mean2)
     else:
         err_mean = 0
-    return pts3D, err_mean
+    return pts3D, err_mean, keep_idx

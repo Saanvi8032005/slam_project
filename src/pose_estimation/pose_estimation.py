@@ -54,7 +54,7 @@ def load_calibration():
     return K, dist
 
 
-def pose_estimate(pts1, pts2, log_err: bool | None = None):
+def pose_estimate(pts1, pts2, idx_i=None, idx_j=None, log_err: bool | None = None):
     """
     Estimate relative pose (R, t) between two views using matched points.
     Includes parallax gating, Essential matrix rank check, and cheirality check.
@@ -160,8 +160,10 @@ def pose_estimate(pts1, pts2, log_err: bool | None = None):
 
     pts1_final = pts1_inliers[maskPose_bool]
     pts2_final = pts2_inliers[maskPose_bool]   
+    idx_i_inl = idx_i[maskE.ravel() == 1][maskPose_bool] if idx_i is not None else None
+    idx_j_inl = idx_j[maskE.ravel() == 1][maskPose_bool] if idx_j is not None else None
 
-    return R, t, K, num_inliers_pose, ratio_pose, pts1_final, pts2_final
+    return R, t, K, num_inliers_pose, ratio_pose, pts1_final, pts2_final, idx_i_inl, idx_j_inl
 
 if __name__ == "__main__":
     print('Run from pipeline.py')

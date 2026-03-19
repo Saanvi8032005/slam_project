@@ -68,3 +68,170 @@ def pnp_tracking(
 
     print(f"[PnP] Updated pose for KF{current_kf.kf_id}:\n{T_cw}")
     return T_cw
+
+
+def run_pnp_for_frame(
+    slam_map,
+    last_kf_id: int,
+    keypoints,
+    descriptors,
+    K,
+    min_matches: int = 20,
+    reproj_error: float = 4.0,
+):
+    """
+    Estimate current frame pose using 2D-3D correspondences from
+    MapPoints observed in the last keyframe.
+
+    Returns
+    -------
+    T_cw : np.ndarray or None
+        4x4 world-to-camera pose.
+    ninliers : int
+        Number of PnP inliers.
+    inlier_kp_to_mp : dict
+        Mapping from current keypoint index -> MapPoint id for inliers.
+    """
+    import numpy as np
+    import cv2 as cv
+
+    if descriptors is None or len(descriptors) == 0:
+        print("[PnP] No descriptors in current frame")
+        return None, 0, {}
+
+    last_kf = slam_map.keyframes[last_kf_id]
+
+    if last_kf.kp_to_mp is None:
+        print("[PnP] last_kf.kp_to_mp is None")
+        return None, 0, {}
+
+    # -------------------------------------------------
+    # 1. Gather MapPoints observed in last keyframe
+    # -------------------------------------------------
+    mp_ids = []
+    mp_desc = []
+    mp_xyz = []
+
+    for kp_idx, mp_id in enumerate(last_kf.kp_to_mp):
+        if mp_id is None:
+            continue
+        if mp_id not in slam_map.mappoints:
+            continue
+
+        mp = slam_map.mappoints[mp_id]
+
+        if mp.xyz is None:
+            continue
+        if not np.all(np.isfinite(mp.xyz)):
+            continue
+        if mp.descriptor is None:
+            continue
+
+        mp_ids.append(mp_id)
+        mp_desc.append(mp.descriptor)
+        mp_xyz.append(mp.xyz)
+
+    if len(mp_ids) < min_matches:
+        print(f"[PnP] Not enough candidate MapPoints: {len(mp_ids)}")
+        return None, 0, {}
+
+    mp_desc = np.asarray(mp_desc, dtype=np.uint8)
+    mp_xyz = np.asarray(mp_xyz, dtype=np.float32).reshape(-1, 3)
+
+    print(f"[PnP] Candidate MapPoints: {len(mp_ids)}")
+
+    # -------------------------------------------------
+    # 2. Match current descriptors to MapPoint descriptors
+    # -------------------------------------------------
+    bf = cv.BFMatcher(cv.NORM_HAMMING, crossCheck=False)
+    knn_matches = bf.knnMatch(descriptors, mp_desc, k=2)
+
+    good_matches = []
+    for pair in knn_matches:
+        if len(pair) < 2:
+            continue
+        m, n = pair
+        if m.distance < 0.75 * n.distance:
+            good_matches.append(m)
+
+    if len(good_matches) < min_matches:
+        print(f"[PnP] Not enough good matches: {len(good_matches)}")
+        return None, 0, {}
+
+    print(f"[PnP] Good descriptor matches: {len(good_matches)}")
+
+    # -------------------------------------------------
+    # 3. Build 2D-3D correspondences
+    # -------------------------------------------------
+    image_points = []
+    object_points = []
+    match_kp_idxs = []
+    match_mp_ids = []
+
+    for m in good_matches:
+        kp_idx = m.queryIdx     # current frame keypoint
+        mp_local_idx = m.trainIdx  # index into mp_xyz/mp_ids
+
+        x, y = keypoints[kp_idx].pt
+        Xw = mp_xyz[mp_local_idx]
+
+        image_points.append([x, y])
+        object_points.append(Xw)
+        match_kp_idxs.append(kp_idx)
+        match_mp_ids.append(mp_ids[mp_local_idx])
+
+    image_points = np.asarray(image_points, dtype=np.float32).reshape(-1, 2)
+    object_points = np.asarray(object_points, dtype=np.float32).reshape(-1, 3)
+
+    # -------------------------------------------------
+    # 4. Solve PnP with RANSAC
+    # -------------------------------------------------
+    ok, rvec, tvec, inliers = cv.solvePnPRansac(
+        objectPoints=object_points,
+        imagePoints=image_points,
+        cameraMatrix=K,
+        distCoeffs=None,
+        iterationsCount=200,
+        reprojectionError=reproj_error,
+        confidence=0.99,
+        flags=cv.SOLVEPNP_EPNP,
+    )
+
+    if not ok or inliers is None or len(inliers) < 6:
+        print("[PnP] solvePnPRansac failed")
+        return None, 0, {}
+
+    inliers = inliers.ravel()
+    ninliers = len(inliers)
+
+    print(f"[PnP] Inliers: {ninliers}")
+
+    # Optional refinement
+    ok_refine, rvec, tvec = cv.solvePnP(
+        object_points[inliers],
+        image_points[inliers],
+        K,
+        None,
+        rvec,
+        tvec,
+        useExtrinsicGuess=True,
+        flags=cv.SOLVEPNP_ITERATIVE,
+    )
+
+    if not ok_refine:
+        print("[PnP] refinement failed")
+        return None, 0, {}
+
+    R, _ = cv.Rodrigues(rvec)
+
+    T_cw = np.eye(4, dtype=np.float64)
+    T_cw[:3, :3] = R
+    T_cw[:3, 3] = tvec.ravel()
+
+    inlier_kp_to_mp = {}
+    for idx in inliers:
+        kp_idx = match_kp_idxs[idx]
+        mp_id = match_mp_ids[idx]
+        inlier_kp_to_mp[int(kp_idx)] = int(mp_id)
+
+    return T_cw, ninliers, inlier_kp_to_mp

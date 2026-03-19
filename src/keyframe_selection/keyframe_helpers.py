@@ -104,8 +104,8 @@ def initialize_map(
     t: np.ndarray,
     kp1,
     kp2,
-    des1=None,
-    des2=None,
+    des1,
+    des2,
 ):
     """
     Initialise pose-graph map with two keyframes and one odometry edge.
