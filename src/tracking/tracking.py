@@ -301,7 +301,7 @@ def matching(matcher="flann",
 if __name__ == "__main__":
 
     # ORB ALR SET
-    MATCHER = "flann"        # "flann" or "bf"
+    MATCHER = "bf"        # "flann" or "bf"
     FILTER = "hist"          # "none", "hist", "ransac"
 
     matching(

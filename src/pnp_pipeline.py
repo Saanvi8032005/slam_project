@@ -277,6 +277,154 @@ def histogram(rot_err_arr):
     print(f"Number of catastrophic failures (≥10°): {num_big}")
 
 
+def geometric_filter_matches(kf_i, kf_j, matches, K):
+    """
+    Use Essential matrix RANSAC to keep only geometrically consistent matches.
+
+    Returns:
+        pts1_inl, pts2_inl, idx_i_inl, idx_j_inl
+    """
+    if len(matches) < 8:
+        return None, None, None, None
+
+    idx_i = np.array([m.queryIdx for m in matches], dtype=int)
+    idx_j = np.array([m.trainIdx for m in matches], dtype=int)
+
+    pts1 = np.array([kf_i.keypoints_xy[q] for q in idx_i], dtype=np.float32)
+    pts2 = np.array([kf_j.keypoints_xy[t] for t in idx_j], dtype=np.float32)
+
+    E, maskE = cv.findEssentialMat(
+        pts1, pts2, K,
+        method=cv.RANSAC,
+        prob=0.999,
+        threshold=1.0
+    )
+
+    if E is None or maskE is None:
+        return None, None, None, None
+
+    maskE = maskE.ravel().astype(bool)
+
+    pts1_inl = pts1[maskE]
+    pts2_inl = pts2[maskE]
+    idx_i_inl = idx_i[maskE]
+    idx_j_inl = idx_j[maskE]
+
+    return pts1_inl, pts2_inl, idx_i_inl, idx_j_inl
+
+
+def filter_new_feature_matches(kf_i, kf_j, matches):
+    """
+    Keep only matches where neither keypoint is already assigned to a MapPoint.
+    """
+    filtered = []
+
+    for m in matches:
+        kp_i = m.queryIdx
+        kp_j = m.trainIdx
+
+        # Skip if this keypoint already has a MapPoint
+        if kf_i.kp_to_mp[kp_i] is not None:
+            continue
+        if kf_j.kp_to_mp[kp_j] is not None:
+            continue
+
+        filtered.append(m)
+
+    return filtered
+
+
+def match_keyframes_for_triangulation(kf_i, kf_j, ratio=0.75):
+    """
+    Match descriptors between two keyframes using KNN + ratio test.
+
+    Returns:
+        good_matches: list[cv.DMatch]
+    """
+    if kf_i.descriptors is None or kf_j.descriptors is None:
+        return []
+
+    bf = cv.BFMatcher(cv.NORM_HAMMING, crossCheck=False)
+    knn = bf.knnMatch(kf_i.descriptors, kf_j.descriptors, k=2)
+
+    good_matches = []
+    for pair in knn:
+        if len(pair) < 2:
+            continue
+        m, n = pair
+        if m.distance < ratio * n.distance:
+            good_matches.append(m)
+
+    return good_matches
+
+
+def triangulate_new_features_between_keyframes(
+    slam_map,
+    kf_i_id,
+    kf_j_id,
+    R_rel,
+    t_rel,
+    K,
+):
+    kf_i = slam_map.keyframes[kf_i_id]
+    kf_j = slam_map.keyframes[kf_j_id]
+
+    # 1. descriptor matching
+    matches = match_keyframes_for_triangulation(kf_i, kf_j, ratio=0.75)
+    print(f"[MAP] KF match candidates: {len(matches)}")
+
+    if len(matches) < 8:
+        print("[MAP] Too few descriptor matches")
+        return 0
+
+    # 2. keep only not-yet-mapped features
+    matches = filter_new_feature_matches(kf_i, kf_j, matches)
+    print(f"[MAP] Unmapped feature matches: {len(matches)}")
+
+    if len(matches) < 8:
+        print("[MAP] Too few unmapped matches")
+        return 0
+
+    # 3. geometric filtering
+    pts1_inl, pts2_inl, idx_i_inl, idx_j_inl = geometric_filter_matches(
+        kf_i, kf_j, matches, K
+    )
+    if pts1_inl is None or len(pts1_inl) < 8:
+        print("[MAP] Geometric filtering rejected too many matches")
+        return 0
+
+    print(f"[MAP] Geometric inliers for triangulation: {len(pts1_inl)}")
+
+    # 4. triangulate
+    pts3D, err_mean, keep_idx = triangulate_from_data(
+        pts1_inl,
+        pts2_inl,
+        R_rel,
+        t_rel,
+        K,
+        mask=None,
+        save_file=False,
+        out_name=None,
+    )
+
+    if pts3D is None or pts3D.shape[0] == 0:
+        print("[MAP] No new points triangulated")
+        return 0
+
+    # 5. create new MapPoints
+    created = create_mappoints_from_triangulation(
+        slam_map=slam_map,
+        kf_i_id=kf_i_id,
+        kf_j_id=kf_j_id,
+        pts3D=pts3D,
+        idx_i=idx_i_inl[keep_idx],
+        idx_j=idx_j_inl[keep_idx],
+    )
+
+    print(f"[MAP] Added {created} new MapPoints")
+    return created
+
+
 if __name__ == "__main__":
 
     image_files = load_image_files()
@@ -354,47 +502,70 @@ if __name__ == "__main__":
                 tracking_results
             )
 
-        T_cw_cur, ninliers, inlier_kp_to_mp = run_pnp_for_frame(
-            slam_map=slam_map,
-            last_kf_id=last_kf_id,
-            keypoints=tracking_entry["kp2"],
-            descriptors=tracking_entry["des2"],
-            K=slam_map.keyframes[last_kf_id].K,
-        )
-
-        if T_cw_cur is None:
-            print("[PIPE] PnP failed")
-            continue
-        if ninliers < 30:
-            print("[PIPE] PnP too weak for KF insertion")
-            continue
-
-        print("[PIPE] PnP pose estimated")
-        print(T_cw_cur)
-
-        kf_j_id = insert_keyframe_if_needed(
-            slam_map=slam_map,
-            frame_id=i + 1,
-            T_cw=T_cw_cur,
-            K=slam_map.keyframes[last_kf_id].K,
-            keypoints_xy=kps_to_xy(tracking_entry["kp2"]),
-            descriptors=tracking_entry["des2"],
-        )
-        kf_j = slam_map.keyframes[kf_j_id]
-        for kp_idx, mp_id in inlier_kp_to_mp.items():
-            kf_j.kp_to_mp[kp_idx] = mp_id
-            slam_map.mappoints[mp_id].observations[kf_j_id] = int(kp_idx)
-
-        last_kf = slam_map.keyframes[last_kf_id]
-        Tcw_last = last_kf.T_cw
-        T_rel = T_cw_cur @ np.linalg.inv(Tcw_last)
-
-        slam_map.add_edge(
-            Edge(
-                kf_i=last_kf_id,
-                kf_j=kf_j_id,
-                T_ij=T_rel,
-                edge_type="odometry",
+            T_cw_cur, ninliers, inlier_kp_to_mp = run_pnp_for_frame(
+                slam_map=slam_map,
+                last_kf_id=last_kf_id,
+                keypoints=tracking_entry["kp2"],
+                descriptors=tracking_entry["des2"],
+                K=slam_map.keyframes[last_kf_id].K,
             )
-        )
-        #   matches = match(last_kf.descriptors, kf_j.descriptors, method="flann")
+
+            if T_cw_cur is None:
+                print("[PIPE] PnP failed")
+                continue
+            if ninliers < 30:
+                print("[PIPE] PnP too weak for KF insertion")
+                continue
+
+            print("[PIPE] PnP pose estimated")
+            print(T_cw_cur)
+
+            kf_j_id = insert_keyframe_if_needed(
+                slam_map=slam_map,
+                frame_id=i + 1,
+                T_cw=T_cw_cur,
+                K=slam_map.keyframes[last_kf_id].K,
+                keypoints_xy=kps_to_xy(tracking_entry["kp2"]),
+                descriptors=tracking_entry["des2"],
+            )
+            
+            # avoid self-edge / duplicate work
+            if kf_j_id == last_kf_id:
+                print("[PIPE] Same keyframe returned, skipping")
+                continue
+
+            kf_j = slam_map.keyframes[kf_j_id]
+
+            # attach existing MapPoints observed by PnP
+            for kp_idx, mp_id in inlier_kp_to_mp.items():
+                kf_j.kp_to_mp[kp_idx] = mp_id
+                slam_map.mappoints[mp_id].observations[kf_j_id] = int(kp_idx)
+
+            last_kf = slam_map.keyframes[last_kf_id]
+            Tcw_last = last_kf.T_cw
+            T_rel = T_cw_cur @ np.linalg.inv(Tcw_last)
+
+            slam_map.add_edge(
+                Edge(
+                    kf_i=last_kf_id,
+                    kf_j=kf_j_id,
+                    T_ij=T_rel,
+                    edge_type="odometry",
+                )
+            )
+
+            R_rel = T_rel[:3, :3]
+            t_rel = T_rel[:3, 3]
+
+            created = triangulate_new_features_between_keyframes(
+                slam_map=slam_map,
+                kf_i_id=last_kf_id,
+                kf_j_id=kf_j_id,
+                R_rel=R_rel,
+                t_rel=t_rel,
+                K=slam_map.keyframes[last_kf_id].K,
+            )
+
+            print(f"[PIPE] Added {created} new MapPoints between KF{last_kf_id} and KF{kf_j_id}")
+
+            last_kf_id = kf_j_id
