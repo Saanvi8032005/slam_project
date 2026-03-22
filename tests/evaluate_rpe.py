@@ -394,3 +394,17 @@ python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_rpe.py \
 --save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rpe_results.txt \
 --verbose
 """
+
+
+"""
+run with:
+python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_rpe.py \
+/Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
+/Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/pnp_tests.txt \
+--offset 0.0 \
+--scale 0.075 \
+--fixed_delta \
+--plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/trajectory_plot_rpe.png \
+--save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rpe_results.txt \
+--verbose
+"""

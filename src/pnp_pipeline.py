@@ -218,7 +218,6 @@ def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean):
     if num_inliers < 80: return False
     if inlier_ratio < 0.4: return False
     if reproj_mean > 1.5: return False
-    #   if num_3d_points < 25 : return False     # alr checking for in triangulation
     return True
 
 
@@ -358,6 +357,90 @@ def match_keyframes_for_triangulation(kf_i, kf_j, ratio=0.75):
     return good_matches
 
 
+def _skew(v):
+    x, y, z = v.reshape(3)
+    return np.array([
+        [0, -z, y],
+        [z, 0, -x],
+        [-y, x, 0]
+    ], dtype=float)
+
+
+def _triangulate_points_pose_consistent(pts1, pts2, R, t, K):
+    """
+    Triangulate points using the provided relative pose:
+        cam1: P1 = K [I | 0]
+        cam2: P2 = K [R | t]
+
+    Returns:
+        pts3D : (N, 3)
+    """
+    P1 = K @ np.hstack([np.eye(3), np.zeros((3, 1))])
+    P2 = K @ np.hstack([R, t.reshape(3, 1)])
+
+    pts4D = cv.triangulatePoints(
+        P1, P2,
+        pts1.T.astype(np.float64),
+        pts2.T.astype(np.float64)
+    )
+    pts3D = (pts4D[:3] / pts4D[3]).T
+    return pts3D
+
+
+def _compute_depths_in_both_cameras(pts3D, R, t):
+    """
+    cam1 coordinates: X1 = X
+    cam2 coordinates: X2 = R X + t
+    """
+    z1 = pts3D[:, 2]
+    X2 = (R @ pts3D.T + t.reshape(3, 1)).T
+    z2 = X2[:, 2]
+    return z1, z2
+
+
+def _reproject_points(pts3D, K, R=None, t=None):
+    """
+    Reproject 3D points into a camera.
+    If R,t are None -> first camera [I|0]
+    Else -> second camera [R|t]
+    """
+    if R is None:
+        Xc = pts3D
+    else:
+        Xc = (R @ pts3D.T + t.reshape(3, 1)).T
+
+    proj = (K @ Xc.T).T
+    uv = proj[:, :2] / proj[:, 2:3]
+    return uv
+
+
+def _parallax_angles_deg(pts3D, R, t):
+    """
+    Compute parallax angle between the two viewing rays.
+
+    Camera 1 center: C1 = [0,0,0]
+    Camera 2 center in cam1 frame: C2 = -R^T t
+    """
+    C1 = np.zeros(3)
+    C2 = -R.T @ t.reshape(3)
+
+    v1 = pts3D - C1
+    v2 = pts3D - C2
+
+    n1 = np.linalg.norm(v1, axis=1, keepdims=True)
+    n2 = np.linalg.norm(v2, axis=1, keepdims=True)
+
+    valid = (n1[:, 0] > 1e-12) & (n2[:, 0] > 1e-12)
+
+    cosang = np.full(len(pts3D), np.nan, dtype=float)
+    cosang[valid] = np.sum(v1[valid] * v2[valid], axis=1) / (
+        n1[valid, 0] * n2[valid, 0]
+    )
+    cosang = np.clip(cosang, -1.0, 1.0)
+    ang = np.degrees(np.arccos(cosang))
+    return ang
+
+
 def triangulate_new_features_between_keyframes(
     slam_map,
     kf_i_id,
@@ -365,14 +448,34 @@ def triangulate_new_features_between_keyframes(
     R_rel,
     t_rel,
     K,
+    ratio=0.75,
+    max_reproj_err=2.0,
+    min_parallax_deg=1.0,
+    min_num_created=8,
 ):
+    """
+    Triangulate new MapPoints between two keyframes using the KNOWN relative pose.
+
+    Pipeline:
+      1. Match descriptors
+      2. Remove keypoints already assigned to MapPoints
+      3. Triangulate with provided R_rel, t_rel
+      4. Keep only points that satisfy:
+           - finite coordinates
+           - positive depth in both cameras
+           - low reprojection error in both images
+           - sufficient parallax
+      5. Create new MapPoints
+
+    Returns:
+        created : int
+    """
     kf_i = slam_map.keyframes[kf_i_id]
     kf_j = slam_map.keyframes[kf_j_id]
 
     # 1. descriptor matching
-    matches = match_keyframes_for_triangulation(kf_i, kf_j, ratio=0.75)
+    matches = match_keyframes_for_triangulation(kf_i, kf_j, ratio=ratio)
     print(f"[MAP] KF match candidates: {len(matches)}")
-
     if len(matches) < 8:
         print("[MAP] Too few descriptor matches")
         return 0
@@ -380,49 +483,113 @@ def triangulate_new_features_between_keyframes(
     # 2. keep only not-yet-mapped features
     matches = filter_new_feature_matches(kf_i, kf_j, matches)
     print(f"[MAP] Unmapped feature matches: {len(matches)}")
-
     if len(matches) < 8:
         print("[MAP] Too few unmapped matches")
         return 0
 
-    # 3. geometric filtering
-    pts1_inl, pts2_inl, idx_i_inl, idx_j_inl = geometric_filter_matches(
-        kf_i, kf_j, matches, K
-    )
-    if pts1_inl is None or len(pts1_inl) < 8:
-        print("[MAP] Geometric filtering rejected too many matches")
+    idx_i = np.array([m.queryIdx for m in matches], dtype=int)
+    idx_j = np.array([m.trainIdx for m in matches], dtype=int)
+
+    pts1 = np.array([kf_i.keypoints_xy[q] for q in idx_i], dtype=np.float64)
+    pts2 = np.array([kf_j.keypoints_xy[t] for t in idx_j], dtype=np.float64)
+
+    flow = np.linalg.norm(pts2 - pts1, axis=1)
+    median_flow = np.median(flow)
+    print(f"[MAP] Median pixel flow: {median_flow:.2f}px")
+
+    if median_flow < 5.0:
+        print("[MAP] Too little image motion for reliable triangulation")
         return 0
 
-    print(f"[MAP] Geometric inliers for triangulation: {len(pts1_inl)}")
+    # 3. triangulate directly with your known pose
+    pts3D = _triangulate_points_pose_consistent(pts1, pts2, R_rel, t_rel, K)
 
-    # 4. triangulate
-    pts3D, err_mean, keep_idx = triangulate_from_data(
-        pts1_inl,
-        pts2_inl,
-        R_rel,
-        t_rel,
-        K,
-        mask=None,
-        save_file=False,
-        out_name=None,
-    )
-
-    if pts3D is None or pts3D.shape[0] == 0:
-        print("[MAP] No new points triangulated")
+    if pts3D is None or len(pts3D) == 0:
+        print("[MAP] No points triangulated")
         return 0
 
-    # 5. create new MapPoints
+    # 4a. finite check
+    finite_mask = np.isfinite(pts3D).all(axis=1)
+
+    # 4b. cheirality / positive depth
+    z1, z2 = _compute_depths_in_both_cameras(pts3D, R_rel, t_rel)
+    depth_mask = (z1 > 1e-6) & (z2 > 1e-6)
+
+    # 4c. reprojection error in both views
+    uv1 = _reproject_points(pts3D, K)
+    uv2 = _reproject_points(pts3D, K, R_rel, t_rel)
+
+    err1 = np.linalg.norm(uv1 - pts1, axis=1)
+    err2 = np.linalg.norm(uv2 - pts2, axis=1)
+    reproj_mask = (err1 < max_reproj_err) & (err2 < max_reproj_err)
+
+    # 4d. parallax
+    parallax_deg = _parallax_angles_deg(pts3D, R_rel, t_rel)
+    parallax_mask = parallax_deg > min_parallax_deg
+
+    keep_mask = finite_mask & depth_mask & reproj_mask & parallax_mask
+
+    n_keep = int(np.sum(keep_mask))
+    print(f"[MAP] finite:      {np.sum(finite_mask)} / {len(matches)}")
+    print(f"[MAP] positive z:  {np.sum(depth_mask)} / {len(matches)}")
+    print(f"[MAP] reproj ok:   {np.sum(reproj_mask)} / {len(matches)}")
+    print(f"[MAP] parallax ok: {np.sum(parallax_mask)} / {len(matches)}")
+    print(f"[MAP] final kept:  {n_keep} / {len(matches)}")
+
+    if n_keep < min_num_created:
+        print("[MAP] Too few valid triangulated points after filtering")
+        return 0
+
+    pts3D_keep = pts3D[keep_mask]
+    idx_i_keep = idx_i[keep_mask]
+    idx_j_keep = idx_j[keep_mask]
+
     created = create_mappoints_from_triangulation(
         slam_map=slam_map,
         kf_i_id=kf_i_id,
         kf_j_id=kf_j_id,
-        pts3D=pts3D,
-        idx_i=idx_i_inl[keep_idx],
-        idx_j=idx_j_inl[keep_idx],
+        pts3D=pts3D_keep,
+        idx_i=idx_i_keep,
+        idx_j=idx_j_keep,
     )
+
+    #   Debugging
+    baseline = np.linalg.norm(t_rel)
+    print(f"[MAP] Relative baseline norm: {baseline:.4f}")
 
     print(f"[MAP] Added {created} new MapPoints")
     return created
+
+
+def cull_weak_mappoints(slam_map, min_observations=2):
+    """
+    Remove MapPoints with too few observations.
+    Also clears references from keyframes.
+    """
+    to_remove = []
+
+    for mp_id, mp in slam_map.mappoints.items():
+        if len(mp.observations) < min_observations:
+            to_remove.append(mp_id)
+
+    if len(to_remove) == 0:
+        print("[MAP] No weak MapPoints to cull")
+        return 0
+
+    for mp_id in to_remove:
+        mp = slam_map.mappoints[mp_id]
+
+        for kf_id, kp_idx in list(mp.observations.items()):
+            if kf_id in slam_map.keyframes:
+                kf = slam_map.keyframes[kf_id]
+                if kf.kp_to_mp is not None and 0 <= kp_idx < len(kf.kp_to_mp):
+                    if kf.kp_to_mp[kp_idx] == mp_id:
+                        kf.kp_to_mp[kp_idx] = None
+
+        del slam_map.mappoints[mp_id]
+
+    print(f"[MAP] Culled {len(to_remove)} weak MapPoints")
+    return len(to_remove)
 
 
 if __name__ == "__main__":
@@ -431,7 +598,7 @@ if __name__ == "__main__":
     tracking_results = {}
     pose_results = {}
     points_results = {}
-    tracking_acceptance = 0
+    tracking_acceptance = {"tracking_acceptance:": 0}
 
     slam_map = Map()
     is_initialized = False
@@ -439,7 +606,7 @@ if __name__ == "__main__":
     init_kf1_id = None
     last_kf_id = None
 
-    for i in range(10 - 1):
+    for i in range(len(image_files) - 1):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -470,7 +637,7 @@ if __name__ == "__main__":
                 pose_entry['inlier_ratio'],
                 points_entry['err_mean'],
             ) and pts3D.shape[0] > 0:
-                tracking_acceptance += 1
+                tracking_acceptance["tracking_acceptance:"] += 1
                 init_kf0_id, init_kf1_id = initialize_map(
                     slam_map=slam_map,
                     frame_id0=i,
@@ -508,6 +675,8 @@ if __name__ == "__main__":
                 keypoints=tracking_entry["kp2"],
                 descriptors=tracking_entry["des2"],
                 K=slam_map.keyframes[last_kf_id].K,
+                kf_window=5,
+                min_observations=2,
             )
 
             if T_cw_cur is None:
@@ -527,8 +696,9 @@ if __name__ == "__main__":
                 K=slam_map.keyframes[last_kf_id].K,
                 keypoints_xy=kps_to_xy(tracking_entry["kp2"]),
                 descriptors=tracking_entry["des2"],
+                tracking_acceptance=tracking_acceptance,
             )
-            
+
             # avoid self-edge / duplicate work
             if kf_j_id == last_kf_id:
                 print("[PIPE] Same keyframe returned, skipping")
@@ -557,6 +727,12 @@ if __name__ == "__main__":
             R_rel = T_rel[:3, :3]
             t_rel = T_rel[:3, 3]
 
+            #   debugging
+            print(f"[PIPE] KF{last_kf_id} -> KF{kf_j_id}")
+            print("det(R_rel):", np.linalg.det(R_rel))
+            print("t_rel:", t_rel)
+            print("t_rel norm:", np.linalg.norm(t_rel))
+
             created = triangulate_new_features_between_keyframes(
                 slam_map=slam_map,
                 kf_i_id=last_kf_id,
@@ -567,5 +743,19 @@ if __name__ == "__main__":
             )
 
             print(f"[PIPE] Added {created} new MapPoints between KF{last_kf_id} and KF{kf_j_id}")
+            if kf_j_id % 5 == 0:
+                cull_weak_mappoints(slam_map, min_observations=2)
+                last_kf_id = kf_j_id
 
-            last_kf_id = kf_j_id
+    # changed nothing 
+    optimise_pose_graph(slam_map, max_nfev=50, robust=True, verbose=2) 
+    print_map(slam_map)
+
+    # Save the estimated trajectory
+    estimated_trajectory_file = PROJECT_ROOT / "outputs" / "tests" / "pnp_tests.txt"
+    save_estimated_trajectory(slam_map, image_files, estimated_trajectory_file)
+
+    print(f"[PIPE] Estimated trajectory saved to {estimated_trajectory_file}")
+
+    print("tracking_acceptance", tracking_acceptance, "out of", len(tracking_results))
+    print(f"[MAP] Number of MapPoints: {len(slam_map.mappoints)}")

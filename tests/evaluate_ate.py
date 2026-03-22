@@ -206,3 +206,17 @@ python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_ate.py \
     --plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/trajectory_plot.png \
     --verbose
 """
+
+"""
+run with:
+python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_ate.py \
+    /Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
+    /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/pnp_tests.txt \
+    --offset 0.0 \
+    --scale 0.1 \
+    --max_difference 0.02 \
+    --save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/aligned_estimated.txt \
+    --save_associations /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/associations.txt \
+    --plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/trajectory_plot.png \
+    --verbose
+"""

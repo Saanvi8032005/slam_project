@@ -71,6 +71,7 @@ def insert_keyframe_if_needed(
     K: np.ndarray,
     keypoints_xy: np.ndarray,
     descriptors,
+    tracking_acceptance=None
 ) -> int:
     """
     Check if a keyframe for the given frame_id already exists in the map.
@@ -92,6 +93,8 @@ def insert_keyframe_if_needed(
         keypoints_xy=keypoints_xy,
         descriptors=descriptors,
     )
+    if tracking_acceptance is not None:
+        tracking_acceptance["tracking_acceptance:"] += 1
     return kf_id
 
 

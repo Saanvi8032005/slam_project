@@ -140,8 +140,10 @@ def triangulate_from_data(
     pts3D = (pts4D[:3] / w).T  # (N, 3)
 
     # --- 4) Simple geometric filtering ---
-    z = pts3D[:, 2]
-    mask_z = (z > 0)
+    z1 = pts3D[:, 2]
+    pts3D_cam2 = (R @ pts3D.T + t).T
+    z2 = pts3D_cam2[:, 2]
+    mask_z = (z1 > 0) & (z2 > 0)
     # TUM depth is in metres -> 0–10 or 0–50 also ok
 
     pts3D = pts3D[mask_z]
