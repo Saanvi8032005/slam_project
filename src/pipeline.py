@@ -40,6 +40,8 @@ from utils.trajectory_utils import save_estimated_trajectory
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
+RBG_DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
+RGB_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb.txt"
 
 
 def load_image_files():
@@ -52,6 +54,47 @@ def load_image_files():
     print(f"[PIPE] Found {len(image_files)} images")
     #   print("FIRST 5 FILES:", image_files[:5])
     return image_files
+
+
+def load_rgb_entries(rgb_txt_path, dataset_root):
+    timestamps = []
+    image_files = []
+
+    with open(rgb_txt_path, "r") as f:
+        for line in f:
+            if line.startswith("#") or len(line.strip()) == 0:
+                continue
+            ts, rel_path = line.split()
+            timestamps.append(float(ts))
+            image_files.append(dataset_root / rel_path)
+
+    print(f"[PIPE] Found {len(image_files)} images from rgb.txt")
+    return timestamps, image_files
+
+
+def load_rgb_and_depth_entries(rgb_txt_path, depth_txt_path, dataset_root):
+    timestamps_rgb, image_files = [], []
+    timestamps_depth, depth_files = [], []
+
+    # Load RGB entries
+    with open(rgb_txt_path, "r") as f:
+        for line in f:
+            if line.startswith("#") or len(line.strip()) == 0:
+                continue
+            ts, rel_path = line.split()
+            timestamps_rgb.append(float(ts))
+            image_files.append(dataset_root / rel_path)
+
+    # Load Depth entries
+    with open(depth_txt_path, "r") as f:
+        for line in f:
+            if line.startswith("#") or len(line.strip()) == 0:
+                continue
+            ts, rel_path = line.split()
+            timestamps_depth.append(float(ts))
+            depth_files.append(dataset_root / rel_path)
+
+    return timestamps_rgb, image_files, timestamps_depth, depth_files
 
 
 def stage_tracking(img1, img2, pair_id, tracking_results):
@@ -100,7 +143,14 @@ def stage_tracking(img1, img2, pair_id, tracking_results):
     return entry
 
 
-def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
+def stage_pose(
+        tracking_entry,
+        pose_store=None,
+        img1=None,
+        img2=None,
+        ts1=None,
+        ts2=None
+    ):
     pair_id = tracking_entry["pair_id"]
     pts1 = tracking_entry["pts1"]
     pts2 = tracking_entry["pts2"]
@@ -132,8 +182,6 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
 
     error_print = True
     if error_print:
-        ts1 = float(img1.stem)
-        ts2 = float(img2.stem)
         rgb_to_gt_pose = build_rgb_to_gt_pose_map(
                             GT_PATH,
                             image_files,
@@ -271,9 +319,39 @@ def histogram(rot_err_arr):
     print(f"Number of catastrophic failures (≥10°): {num_big}")
 
 
+def generate_3d_points_from_depth(depth_image, K):
+    """
+    Generate 3D points from a depth image.
+
+    Args:
+        depth_image (np.ndarray): Depth image.
+        K (np.ndarray): Camera intrinsic matrix.
+
+    Returns:
+        np.ndarray: 3D points (N x 3).
+    """
+    h, w = depth_image.shape
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+
+    # Generate pixel grid
+    x, y = np.meshgrid(np.arange(w), np.arange(h))
+    x = x.astype(np.float32)
+    y = y.astype(np.float32)
+
+    # Back-project to 3D
+    z = depth_image / 1000.0  # Convert depth to meters if needed
+    x = (x - cx) * z / fx
+    y = (y - cy) * z / fy
+
+    points_3d = np.stack((x, y, z), axis=-1).reshape(-1, 3)
+    return points_3d
+
+
 if __name__ == "__main__":
 
-    image_files = load_image_files()
+    #   timestamps, image_files = load_rgb_entries(RGB_TXT, RBG_DATA_DIR)
+    timestamps, image_files, timestamps_depth, depth_files = load_rgb_and_depth_entries(RGB_TXT, RBG_DATA_DIR / "depth.txt", RBG_DATA_DIR)
     tracking_results = {}
     pose_results = {}
     points_results = {}
@@ -295,13 +373,29 @@ if __name__ == "__main__":
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
         print(f"[PIPE] Image 2: {image_files[i + 1]}")
+        print(f"[PIPE] Depth Image 1: {depth_files[i]}")
+        print(f"[PIPE] Depth Image 2: {depth_files[i + 1]}")
+
 
         pair_id = f"{i:03d}"
         img1 = image_files[i]
         img2 = image_files[i + 1]
+        # Load depth images
+        depth1 = cv.imread(str(depth_files[i]), cv.IMREAD_UNCHANGED)
+        depth2 = cv.imread(str(depth_files[i + 1]), cv.IMREAD_UNCHANGED)
+        # Generate 3D points from depth
+        points_3d_1 = generate_3d_points_from_depth(depth1, K)
+        points_3d_2 = generate_3d_points_from_depth(depth2, K)
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
-        R, t, K, num_inliers, inlier_ratio, rot_err, dir_err, _, _ = stage_pose(tracking_entry, pose_results, img1, img2)
+        R, t, K, num_inliers, inlier_ratio, rot_err, dir_err, _, _ = stage_pose(
+            tracking_entry,
+            pose_results,
+            img1,
+            img2,
+            ts1=timestamps[i],
+            ts2=timestamps[i + 1],
+        )
 
         if R is None:  # Skip pairs with low parallax
             continue
