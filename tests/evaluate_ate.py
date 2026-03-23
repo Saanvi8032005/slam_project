@@ -219,3 +219,15 @@ python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_ate.py \
     --plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/trajectory_plot.png \
     --verbose
 """
+
+"""
+python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_ate.py \
+    /Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
+    /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rgbd_vo_traj.txt \
+    --offset 0.0 \
+    --max_difference 0.02 \
+    --save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/aligned_estimated.txt \
+    --save_associations /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/associations.txt \
+    --plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/depth_trajectory_plot.png \
+    --verbose
+"""

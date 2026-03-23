@@ -11,6 +11,7 @@ import numpy as np
 import sys
 import matplotlib.pyplot as plt
 import cv2 as cv
+from scipy.spatial.transform import Rotation
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -37,13 +38,32 @@ from keyframe_selection.keyframe_helpers import (
 )
 from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
 from utils.trajectory_utils import save_estimated_trajectory
-from depth.util import depth_to_meters, backproject_keypoint, backproject_keypoints
+from depth.util import (
+    depth_to_meters,
+    backproject_keypoint,
+    backproject_keypoints,
+    matched_pixels_to_3d2d,
+    stage_pose_rgbd,
+    generate_3d_points_from_depth,
+    keypoints_with_depth,
+    load_txt_entries,
+)
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
-RBG_DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
+RGB_DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
 RGB_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb.txt"
-DEPTH_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "depth"
+DEPTH_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "depth"
+DEPTH_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "depth.txt"
+FX = 525.0
+FY = 525.0
+CX = 319.5
+CY = 239.5
+K_RGBD = np.array([
+    [FX, 0, CX],
+    [0, FY, CY],
+    [0,  0,  1]
+], dtype=np.float64)
 
 
 def load_rgb_entries(rgb_txt_path, dataset_root):
@@ -284,35 +304,6 @@ def histogram(rot_err_arr):
     print(f"Number of catastrophic failures (≥10°): {num_big}")
 
 
-def generate_3d_points_from_depth(depth_image, K):
-    """
-    Generate 3D points from a depth image.
-
-    Args:
-        depth_image (np.ndarray): Depth image.
-        K (np.ndarray): Camera intrinsic matrix.
-
-    Returns:
-        np.ndarray: 3D points (N x 3).
-    """
-    h, w = depth_image.shape
-    fx, fy = K[0, 0], K[1, 1]
-    cx, cy = K[0, 2], K[1, 2]
-
-    # Generate pixel grid
-    x, y = np.meshgrid(np.arange(w), np.arange(h))
-    x = x.astype(np.float32)
-    y = y.astype(np.float32)
-
-    # Back-project to 3D
-    z = depth_image / 1000.0  # Convert depth to meters if needed
-    x = (x - cx) * z / fx
-    y = (y - cy) * z / fy
-
-    points_3d = np.stack((x, y, z), axis=-1).reshape(-1, 3)
-    return points_3d
-
-
 def associate_rgb_depth(rgb_entries, depth_entries, max_diff=0.02):
     """
     rgb_entries:   list of (rgb_ts, rgb_path)
@@ -360,31 +351,44 @@ def associate_rgb_depth(rgb_entries, depth_entries, max_diff=0.02):
     return frames
 
 
+def load_rgbd_frames(rgb_txt_path, depth_txt_path, dataset_root, max_diff=0.02):
+    rgb_entries = load_txt_entries(rgb_txt_path, dataset_root)
+    depth_entries = load_txt_entries(depth_txt_path, dataset_root)
+    frames = associate_rgb_depth(rgb_entries, depth_entries, max_diff=max_diff)
+    print(f"[RGBD] Loaded {len(frames)} RGB-D frames")
+    return frames
+
+
+def save_rgbd_trajectory(global_poses, frames, output_file):
+    """
+    Save estimated trajectory in TUM format:
+    timestamp tx ty tz qx qy qz qw
+
+    Assumes global_poses stores T_cw.
+    Converts each pose to T_wc before saving.
+    """
+    with open(output_file, "w") as f:
+        for frame, T_cw in zip(frames[:len(global_poses)], global_poses):
+            ts = frame["rgb_ts"]
+
+            T_wc = np.linalg.inv(T_cw)
+            R_wc = T_wc[:3, :3]
+            t_wc = T_wc[:3, 3]
+
+            qx, qy, qz, qw = Rotation.from_matrix(R_wc).as_quat()
+            f.write(f"{ts} {t_wc[0]} {t_wc[1]} {t_wc[2]} {qx} {qy} {qz} {qw}\n")
+
+
 if __name__ == "__main__":
 
-    timestamps, image_files = load_rgb_entries(RGB_TXT, RBG_DATA_DIR)
+    timestamps, image_files = load_rgb_entries(RGB_TXT, RGB_DATA_DIR)
     tracking_results = {}
-    pose_results = {}
-    points_results = {}
-    tracking_acceptance = 0
-    ransac_ratios = []          # for report
-    rot_errors = []             # for report
-    trans_dir_errors = []       # for report
-    tri_counts = []             # for report
-    tri_errors = []             # for report
+    global_poses = [np.eye(4)]
+    frames = load_rgbd_frames(RGB_TXT, DEPTH_TXT, RGB_DATA_DIR)
 
-    slam_map = Map()
-    is_initialized = False
-    init_kf0_id = None
-    init_kf1_id = None
-    last_kf_id = None
-
-    frames = load_rgbd_frames(RGB_TXT, DEPTH_TXT, RBG_DATA_DIR)
     for i in range(len(frames) - 1):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
-        print(f"[PIPE] Image 1: {image_files[i]}")
-        print(f"[PIPE] Image 2: {image_files[i + 1]}")
 
         f1 = frames[i]
         f2 = frames[i + 1]
@@ -400,3 +404,54 @@ if __name__ == "__main__":
 
         depth1_m = depth_to_meters(depth1)
         depth2_m = depth_to_meters(depth2)
+
+        tracking_entry = stage_tracking(
+            str(f1["rgb_path"]),
+            str(f2["rgb_path"]),
+            pair_id=i,
+            tracking_results=tracking_results,
+        )
+
+        pose_entry = stage_pose_rgbd(tracking_entry, depth1_m, K_RGBD)
+
+        if pose_entry is None:
+            continue
+
+        R = pose_entry["R"]
+        t = pose_entry["t"]
+        num_inliers = pose_entry["num_inliers"]
+        ratio = pose_entry["inlier_ratio"]
+
+        if num_inliers < 30 or ratio < 0.7:
+            print("[WARN] Weak RGB-D pose estimate, skipping pose accumulation")
+            continue
+
+        print("[RGBD] Relative pose:")
+        print("R =\n", R)
+        print("t =\n", t.ravel())
+
+        # Check convention
+        T_21 = pose_entry["T_21"]
+        T_12 = np.linalg.inv(T_21)
+
+        T_w1 = global_poses[-1]
+        T_w2 = T_w1 @ T_12
+        global_poses.append(T_w2)
+
+        print(f"[PIPE] Pose count = {len(global_poses)}")
+        print(f"[RGBD] PnP inliers: {num_inliers}")
+        print(f"[RGBD] Inlier ratio: {ratio:.3f}")
+        print(f"[RGBD] Translation norm: {np.linalg.norm(t):.3f}")
+
+        rgb_to_gt_pose = build_rgb_to_gt_pose_map(GT_PATH, image_files, max_diff=0.02)
+        R_gt, t_gt = relative_pose_from_rgb_ts(rgb_to_gt_pose, ts1, ts2)
+
+        rot_err = rotation_error_deg(R, R_gt)
+        dir_err = translation_direction_error_deg(t, t_gt)
+
+        print(f"[RGBD][GT] Rotation error: {rot_err:.3f} deg")
+        print(f"[RGBD][GT] Translation direction error: {dir_err:.3f} deg")
+
+        out_file = PROJECT_ROOT / "outputs" / "tests" / "rgbd_vo_traj.txt"
+        save_rgbd_trajectory(global_poses, frames, out_file)
+        print(f"[PIPE] Saved trajectory to {out_file}")
