@@ -34,9 +34,6 @@ from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
 from keyframe_selection.keyframe_helpers import (
     initialize_map,  # Fixed function name
     add_map_edge,
-    run_pnp_for_frame,
-    create_mappoints_from_triangulation,
-    run_pnp_for_frame2
 )
 from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
 from utils.trajectory_utils import save_estimated_trajectory
@@ -68,7 +65,7 @@ def stage_tracking(img1, img2, pair_id, tracking_results):
     print(f"\n=== STAGE 1: TRACKING / MATCHING ({pair_id}) ===")
 
     out_file = f"matches_{pair_id}.npz"
-    pts1, pts2, kp1, kp2, matches = matching(
+    pts1, pts2, kp1, kp2, matches, _, _, _, _ = matching(
              matcher=MATCHER,
              filter_method=FILTER,
              img1_path=img1,
@@ -116,7 +113,12 @@ def stage_pose(tracking_entry, pose_store=None, img1=None, img2=None):
         print(f"[PIPE] Skipping pair {pair_id} due to low parallax or pose estimation failure")
         return None, None, None, 0, 0.0, None, None, None, None
 
-    R, t, K, num_inliers, ratio, pts1, pts2 = result
+    R, t, K, num_inliers, ratio, pts1, pts2, _, _ = result
+    t_norm = np.linalg.norm(t)
+    if t_norm > 1e-12:
+        t = t / t_norm
+    STEP_SCALE = 0.05
+    t = t * STEP_SCALE
 
     if pose_store is not None:
         pose_store[pair_id] = {
@@ -169,7 +171,7 @@ def stage_triangulate(tracking_entry, pose_entry, points_store=None):
     K = pose_entry["K"]
 
     # Call triangulation function
-    pts3D, err_mean = triangulate_from_data(
+    pts3D, err_mean, _ = triangulate_from_data(
         pts1,
         pts2,
         R,
@@ -208,7 +210,7 @@ def stage_visualise(points_file):
 
 def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean):
     if num_inliers < 80: return False
-    if inlier_ratio < 0.4: return False
+    #   if inlier_ratio < 0.4: return False
     if reproj_mean > 1.5: return False
     #   if num_3d_points < 25 : return False     # alr checking for in triangulation
     return True
@@ -391,3 +393,8 @@ if __name__ == "__main__":
     print_stats("Num 3D points per pair", tri_counts, want_min=True)
     print_stats("Mean reprojection error [px]", tri_errors, want_min=True)
     print("\n===================================================\n")
+
+    print("Accepted keyframe frame_ids:")
+    for kf_id in sorted(slam_map.keyframes.keys()):
+        print(slam_map.keyframes[kf_id].frame_id, end=" ")
+    print()

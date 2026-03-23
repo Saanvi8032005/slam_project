@@ -85,7 +85,7 @@ def pose_estimate(pts1, pts2, idx_i=None, idx_j=None, log_err: bool | None = Non
     # Compute parallax (flow)
     flow = np.linalg.norm(pts2 - pts1, axis=1)
     median_flow = np.median(flow)
-    PARALLAX_PX_THRESH = 2.0  # Threshold for parallax in pixels
+    PARALLAX_PX_THRESH = 1.0  # Threshold for parallax in pixels
 
     print(f"[POSE] Median flow: {median_flow:.2f} px")
     if median_flow < PARALLAX_PX_THRESH:

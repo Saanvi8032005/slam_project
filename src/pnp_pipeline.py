@@ -30,7 +30,6 @@ from tests.pose_estimation_eval import (
 from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
 from keyframe_selection.keyframe_helpers import (
     initialize_map,  # Fixed function name
-    run_pnp_for_frame,
     create_mappoints_from_triangulation,
     insert_keyframe_if_needed,
     kps_to_xy,
@@ -234,7 +233,7 @@ def save_global_points(global_points):
         # np.savetxt("global_points.xyz", pts)
 
         # Option 2 (nicer): save into outputs/aligning_pc
-        out_path = PROJECT_ROOT / "outputs" / "aligning_pc" / "final_cloud.xyz"
+        out_path = PROJECT_ROOT / "outputs" / "aligning_pc" / "post_pnp_cloud.xyz"
         np.savetxt(out_path, pts)
 
 
@@ -452,6 +451,7 @@ def triangulate_new_features_between_keyframes(
     max_reproj_err=2.0,
     min_parallax_deg=1.0,
     min_num_created=8,
+    max_new_points=1000,  # Cap new MapPoints per pair
 ):
     """
     Triangulate new MapPoints between two keyframes using the KNOWN relative pose.
@@ -465,7 +465,7 @@ def triangulate_new_features_between_keyframes(
            - positive depth in both cameras
            - low reprojection error in both images
            - sufficient parallax
-      5. Create new MapPoints
+      5. Create new MapPoints (capped to max_new_points)
 
     Returns:
         created : int
@@ -540,6 +540,14 @@ def triangulate_new_features_between_keyframes(
         print("[MAP] Too few valid triangulated points after filtering")
         return 0
 
+    if n_keep > max_new_points:
+        keep_indices = np.where(keep_mask)[0]
+        # score: smaller reprojection error is better
+        total_err = err1 + err2
+        ranked = keep_indices[np.argsort(total_err[keep_indices])]
+        keep_mask[:] = False
+        keep_mask[ranked[:max_new_points]] = True
+
     pts3D_keep = pts3D[keep_mask]
     idx_i_keep = idx_i[keep_mask]
     idx_j_keep = idx_j[keep_mask]
@@ -592,6 +600,24 @@ def cull_weak_mappoints(slam_map, min_observations=2):
     return len(to_remove)
 
 
+def save_slam_map_points(slam_map):
+    pts = []
+    for mp in slam_map.mappoints.values():
+        if mp.xyz is not None:
+            pts.append(mp.xyz)
+
+    if len(pts) == 0:
+        print("[PIPE] No SLAM map points to save.")
+        return
+
+    pts = np.array(pts, dtype=float)
+    pts = pts[np.isfinite(pts).all(axis=1)]
+
+    out_path = PROJECT_ROOT / "outputs" / "aligning_pc" / "post_pnp_cloud.xyz"
+    np.savetxt(out_path, pts)
+    print(f"[PIPE] Saved {len(pts)} SLAM map points to {out_path}")
+
+
 if __name__ == "__main__":
 
     image_files = load_image_files()
@@ -606,7 +632,13 @@ if __name__ == "__main__":
     init_kf1_id = None
     last_kf_id = None
 
-    for i in range(len(image_files) - 1):
+    pnp_success = 0
+    pnp_failed = 0
+    pnp_weak = 0
+    kf_inserted = 0
+    kf_reused = 0
+
+    for i in range(35 - 1):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -681,8 +713,12 @@ if __name__ == "__main__":
 
             if T_cw_cur is None:
                 print("[PIPE] PnP failed")
+                pnp_failed += 1
                 continue
+            pnp_success += 1
+            print(f"[PIPE] PnP succedded with {ninliers} inliers")
             if ninliers < 30:
+                pnp_weak += 1
                 print("[PIPE] PnP too weak for KF insertion")
                 continue
 
@@ -702,7 +738,9 @@ if __name__ == "__main__":
             # avoid self-edge / duplicate work
             if kf_j_id == last_kf_id:
                 print("[PIPE] Same keyframe returned, skipping")
+                kf_reused += 1
                 continue
+            kf_inserted += 1
 
             kf_j = slam_map.keyframes[kf_j_id]
 
@@ -745,17 +783,27 @@ if __name__ == "__main__":
             print(f"[PIPE] Added {created} new MapPoints between KF{last_kf_id} and KF{kf_j_id}")
             if kf_j_id % 5 == 0:
                 cull_weak_mappoints(slam_map, min_observations=2)
-                last_kf_id = kf_j_id
+            last_kf_id = kf_j_id
 
     # changed nothing 
     optimise_pose_graph(slam_map, max_nfev=50, robust=True, verbose=2) 
     print_map(slam_map)
 
-    # Save the estimated trajectory
-    estimated_trajectory_file = PROJECT_ROOT / "outputs" / "tests" / "pnp_tests.txt"
-    save_estimated_trajectory(slam_map, image_files, estimated_trajectory_file)
+    if True:
+        # Save the estimated trajectory
+        estimated_trajectory_file = PROJECT_ROOT / "outputs" / "tests" / "pnp_tests.txt"
+        save_estimated_trajectory(slam_map, image_files, estimated_trajectory_file)
 
-    print(f"[PIPE] Estimated trajectory saved to {estimated_trajectory_file}")
+        print(f"[PIPE] Estimated trajectory saved to {estimated_trajectory_file}")
 
     print("tracking_acceptance", tracking_acceptance, "out of", len(tracking_results))
     print(f"[MAP] Number of MapPoints: {len(slam_map.mappoints)}")
+
+    if True:
+        save_slam_map_points(slam_map)
+
+    print("PnP success:", pnp_success)
+    print("PnP failed:", pnp_failed)
+    print("PnP weak (<30 inliers):", pnp_weak)
+    print("Keyframes inserted:", kf_inserted)
+    print("Frames reused existing keyframe:", kf_reused)

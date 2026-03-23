@@ -33,7 +33,9 @@ def align_point_clouds(pose_results: dict,
                        ):
 
     pair_ids = sorted(pose_results.keys())
-    #   check again
+    if not pair_ids:
+        print("[ALIGN] No common pose/point pairs to align")
+        return np.empty((0, 3))
 
     camera_poses = []  # list of 4x4 matrices, one per camera
     C = np.eye(4)      # world = camera 0 frame
@@ -41,12 +43,18 @@ def align_point_clouds(pose_results: dict,
 
     prev_pts = None     # previous pair's local cloud
 
+    valid_pairs = []  # Track valid pairs (pid, valid_idx)
+
     for idx, pid in enumerate(pair_ids):
+        if pid not in points_results:
+            print(f"[ALIGN] Skipping pair {pid}: No points found in points_results")
+            continue
+
         R = pose_results[pid]["R"].reshape(3, 3)
         t = pose_results[pid]["t"].reshape(3, 1)
 
         # --- Optional ICP refinement for local mapping ---
-        curr_pts = points_results[pid]["points"]  # (N, 3) in camera i frame
+        curr_pts = points_results[pid].get("points", np.empty((0, 3)))
 
         if prev_pts is not None and curr_pts.size > 0 and prev_pts.size > 0:
             try:
@@ -72,21 +80,22 @@ def align_point_clouds(pose_results: dict,
 
         C = C @ T          # pose of next camera in world
         camera_poses.append(C)
-
+        valid_pairs.append((pid, len(camera_poses) - 1))  # Track valid pair and index
 
     # camera_poses[k] = pose of camera k in world frame
-    # pair "000" uses camera 0, pair "001" uses camera 1, etc.
+    # valid_pairs contains (pid, valid_idx) for valid pairs
 
     # 3) Transform each per-pair point cloud into world frame
     global_points_list = []
 
-    for idx, pid in enumerate(pair_ids):
-        pts_local = points_results[pid]["points"]  # (N, 3)
+    for pid, valid_idx in valid_pairs:
+        pts_local = points_results.get(pid, {}).get("points", np.empty((0, 3)))
         if pts_local.size == 0:
+            print(f"[ALIGN] Skipping pair {pid}: Empty point cloud")
             continue
 
         # pair i → points are in camera i frame
-        C_i = camera_poses[idx]  # 4x4
+        C_i = camera_poses[valid_idx]  # Use valid index for camera_poses
 
         P_h = np.hstack([pts_local, np.ones((pts_local.shape[0], 1))])  # (N, 4)
         P_w = (C_i @ P_h.T).T[:, :3]  # (N, 3)
@@ -124,12 +133,12 @@ def align_point_clouds(pose_results: dict,
             print(f"[ALIGN] Global debug radius (98th percentile): {r:.2f}")
 
             # Plot each cloud separately with same clipping
-            for idx, pid in enumerate(pair_ids):
+            for pid, valid_idx in valid_pairs:
                 pts_local = points_results[pid]["points"]
                 if pts_local.size == 0:
                     continue
 
-                C_i = camera_poses[idx]
+                C_i = camera_poses[valid_idx]
                 P_h = np.hstack([pts_local, np.ones((pts_local.shape[0], 1))])
                 P_w = (C_i @ P_h.T).T[:, :3]
 
@@ -141,7 +150,7 @@ def align_point_clouds(pose_results: dict,
                     P_plot[:, 1],
                     P_plot[:, 2],
                     s=4,
-                    c=colours[idx % len(colours)],
+                    c=colours[valid_idx % len(colours)],
                     label=f"Cloud {pid}",
                 )
 

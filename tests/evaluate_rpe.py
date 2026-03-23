@@ -43,6 +43,7 @@ import sys
 
 _EPS = numpy.finfo(float).eps * 4.0
 
+
 def transform44(l):
     """
     Generate a 4x4 homogeneous transformation matrix from a 3D point and unit quaternion.
@@ -59,10 +60,10 @@ def transform44(l):
     nq = numpy.dot(q, q)
     if nq < _EPS:
         return numpy.array((
-        (                1.0,                 0.0,                 0.0, t[0])
-        (                0.0,                 1.0,                 0.0, t[1])
-        (                0.0,                 0.0,                 1.0, t[2])
-        (                0.0,                 0.0,                 0.0, 1.0)
+            (                1.0,                 0.0,                 0.0, t[0]),
+            (                0.0,                 1.0,                 0.0, t[1]),
+            (                0.0,                 0.0,                 1.0, t[2]),
+            (                0.0,                 0.0,                 0.0, 1.0)
         ), dtype=numpy.float64)
     q *= numpy.sqrt(2.0 / nq)
     q = numpy.outer(q, q)
@@ -71,7 +72,8 @@ def transform44(l):
         (    q[0, 1]+q[2, 3], 1.0-q[0, 0]-q[2, 2],     q[1, 2]-q[0, 3], t[1]),
         (    q[0, 2]-q[1, 3],     q[1, 2]+q[0, 3], 1.0-q[0, 0]-q[1, 1], t[2]),
         (                0.0,                 0.0,                 0.0, 1.0)
-        ), dtype=numpy.float64)
+    ), dtype=numpy.float64)
+
 
 def read_trajectory(filename, matrix=True):
     """
@@ -107,6 +109,7 @@ def read_trajectory(filename, matrix=True):
       traj = dict([(l[0],l[1:8]) for l in list_ok])
     return traj
 
+
 def find_closest_index(L,t):
     """
     Find the index of the closest value in a list.
@@ -135,6 +138,7 @@ def find_closest_index(L,t):
             beginning = middle + 1
     return best
 
+
 def ominus(a,b):
     """
     Compute the relative 3D transformation between a and b.
@@ -148,6 +152,7 @@ def ominus(a,b):
     """
     return numpy.dot(numpy.linalg.inv(a),b)
 
+
 def scale(a,scalar):
     """
     Scale the translational components of a 4x4 homogeneous matrix by a scale factor.
@@ -159,11 +164,13 @@ def scale(a,scalar):
          [a[3,0], a[3,1], a[3,2], a[3,3]]]
                        )
 
+
 def compute_distance(transform):
     """
     Compute the distance of the translational component of a 4x4 homogeneous matrix.
     """
     return numpy.linalg.norm(transform[0:3,3])
+
 
 def compute_angle(transform):
     """
@@ -171,6 +178,7 @@ def compute_angle(transform):
     """
     # an invitation to 3-d vision, p 27
     return numpy.arccos( min(1,max(-1, (numpy.trace(transform[0:3,0:3]) - 1)/2) ))
+
 
 def distances_along_trajectory(traj):
     """
@@ -185,7 +193,8 @@ def distances_along_trajectory(traj):
         sum += compute_distance(t)
         distances.append(sum)
     return distances
-    
+
+
 def rotations_along_trajectory(traj,scale):
     """
     Compute the angular rotations along a trajectory. 
@@ -199,7 +208,7 @@ def rotations_along_trajectory(traj,scale):
         sum += compute_angle(t)*scale
         distances.append(sum)
     return distances
-    
+
 
 def evaluate_trajectory(traj_gt,traj_est,param_max_pairs=10000,param_fixed_delta=False,param_delta=1.00,param_delta_unit="s",param_offset=0.00,param_scale=1.00):
     """
@@ -296,6 +305,7 @@ def evaluate_trajectory(traj_gt,traj_est,param_max_pairs=10000,param_fixed_delta
         
     return result
 
+
 def percentile(seq,q):
     """
     Return the q-percentile of a list
@@ -303,6 +313,7 @@ def percentile(seq,q):
     seq_sorted = list(seq)
     seq_sorted.sort()
     return seq_sorted[int((len(seq_sorted)-1)*q)]
+
 
 if __name__ == '__main__':
     random.seed(0)
@@ -388,9 +399,8 @@ python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_rpe.py \
 /Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
 /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/tests.txt \
 --offset 0.0 \
---scale 0.075 \
 --fixed_delta \
---plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/trajectory_plot_rpe.png \
+--plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/chain_trajectory_plot_rpe.png \
 --save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rpe_results.txt \
 --verbose
 """

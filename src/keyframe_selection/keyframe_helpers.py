@@ -262,7 +262,7 @@ def create_mappoints_from_triangulation(
     return created
 
 
-def run_pnp_for_frame(slam_map, keypoints, descriptors, K):
+def run_pnp_for_frame3(slam_map, keypoints, descriptors, K):
 
     if len(slam_map.mappoints) == 0:
         return None, 0
