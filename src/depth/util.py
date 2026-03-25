@@ -232,3 +232,136 @@ def load_txt_entries(txt_path, dataset_root):
             ts, rel_path = line.split()
             entries.append((float(ts), dataset_root / rel_path))
     return entries
+
+
+
+
+def create_new_mappoints_from_depth_for_keyframe(
+    slam_map,
+    kf_id,
+    depth_m,
+    max_depth=5.0,
+):
+    kf = slam_map.keyframes[kf_id]
+    return create_mappoints_from_depth(
+        slam_map=slam_map,
+        kf_id=kf_id,
+        depth_m=depth_m,
+        keypoints=kf.keypoints,
+        descriptors=kf.descriptors,
+        max_depth=max_depth,
+    )
+
+
+def create_mappoints_from_depth(
+    slam_map,
+    kf_id,
+    depth_m,
+    keypoints,
+    descriptors,
+    max_depth=5.0,
+):
+    """
+    Create MapPoints directly from valid-depth keypoints in a keyframe.
+    Assumes keyframe pose is T_cw and keypoints are cv.KeyPoint.
+    """
+    kf = slam_map.keyframes[kf_id]
+    T_cw = kf.T_cw
+    T_wc = np.linalg.inv(T_cw)
+    K = kf.K
+
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+
+    created = 0
+
+    for kp_idx, kp in enumerate(keypoints):
+        # skip if already linked
+        if kp_idx in kf.kp_to_mp and kf.kp_to_mp[kp_idx] is not None:
+            continue
+
+        u, v = kp.pt
+        u = int(round(u))
+        v = int(round(v))
+
+        if not (0 <= v < depth_m.shape[0] and 0 <= u < depth_m.shape[1]):
+            continue
+
+        z = depth_m[v, u]
+        if not np.isfinite(z) or z <= 0 or z > max_depth:
+            continue
+
+        x = (u - cx) * z / fx
+        y = (v - cy) * z / fy
+
+        p_cam = np.array([x, y, z, 1.0], dtype=np.float64)
+        p_world = (T_wc @ p_cam)[:3]
+
+        mp_id = slam_map.next_mappoint_id
+        slam_map.next_mappoint_id += 1
+
+        mp = MapPoint(
+            id=mp_id,
+            xyz=p_world,
+            descriptor=descriptors[kp_idx],
+        )
+        mp.observations[kf_id] = int(kp_idx)
+
+        slam_map.mappoints[mp_id] = mp
+        kf.kp_to_mp[kp_idx] = mp_id
+        created += 1
+
+    print(f"[MAP] Created {created} depth-born MapPoints in KF{kf_id}")
+    return created
+
+
+def initialize_map_rgbd(
+    slam_map,
+    frame_id,
+    rgb_path,
+    depth_m,
+    K,
+):
+    """
+    Initialise map from a single RGB-D frame.
+    """
+    img = cv.imread(str(rgb_path), cv.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError(f"Could not load image {rgb_path}")
+
+    orb = cv.ORB_create(4000)
+    keypoints, descriptors = orb.detectAndCompute(img, None)
+
+    if keypoints is None or descriptors is None or len(keypoints) == 0:
+        raise ValueError("No ORB features found in initial RGB-D frame")
+
+    T_cw = np.eye(4, dtype=np.float64)
+
+    kf_id = slam_map.next_keyframe_id
+    slam_map.next_keyframe_id += 1
+
+    kf = Keyframe(
+        id=kf_id,
+        frame_id=frame_id,
+        T_cw=T_cw,
+        K=K,
+        keypoints=keypoints,
+        descriptors=descriptors,
+    )
+
+    # ensure kp_to_mp exists
+    if not hasattr(kf, "kp_to_mp") or kf.kp_to_mp is None:
+        kf.kp_to_mp = {}
+
+    slam_map.keyframes[kf_id] = kf
+
+    create_mappoints_from_depth(
+        slam_map=slam_map,
+        kf_id=kf_id,
+        depth_m=depth_m,
+        keypoints=keypoints,
+        descriptors=descriptors,
+    )
+
+    print(f"[PIPE] RGB-D map initialised with KF{kf_id}")
+    return kf_id

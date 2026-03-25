@@ -626,7 +626,7 @@ if __name__ == "__main__":
     points_results = {}
     tracking_acceptance = {"tracking_acceptance:": 0}
 
-    slam_map = Map()
+  
     is_initialized = False
     init_kf0_id = None
     init_kf1_id = None

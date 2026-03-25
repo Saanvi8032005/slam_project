@@ -256,7 +256,7 @@ def stage_visualise(points_file):
     visualize_points(points_file=str(points_file))
 
 
-def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean):
+def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean=None):
     if num_inliers < 80: return False
     #   if inlier_ratio < 0.4: return False
     if reproj_mean > 1.5: return False
@@ -448,6 +448,9 @@ if __name__ == "__main__":
     frames = load_rgbd_frames(RGB_TXT, DEPTH_TXT, RGB_DATA_DIR)
     error_prints = True
     rgb_to_gt_pose = build_rgb_to_gt_pose_map(GT_PATH, image_files, max_diff=0.02)
+    is_initialised = False
+    slam_map = Map()
+    tracking_acceptance = {"tracking_acceptance:": 0}
 
     for i in range(10 - 1):
         print("\n" + "="*200)
@@ -468,32 +471,53 @@ if __name__ == "__main__":
         depth1_m = depth_to_meters(depth1)
         depth2_m = depth_to_meters(depth2)
 
-        tracking_entry = stage_tracking(
-            str(f1["rgb_path"]),
-            str(f2["rgb_path"]),
-            pair_id=i,
-            tracking_results=tracking_results,
-        )
+        if not is_initialised:
+            tracking_entry = stage_tracking(
+                str(f1["rgb_path"]),
+                str(f2["rgb_path"]),
+                pair_id=i,
+                tracking_results=tracking_results,
+            )
+            pose_entry = stage_pose_rgbd(tracking_entry, depth1_m, K_RGBD)
+            if pose_entry is None:
+                continue
 
-        pose_entry = stage_pose_rgbd(tracking_entry, depth1_m, K_RGBD)
+            R = pose_entry["R"]
+            t = pose_entry["t"]
+            num_inliers = pose_entry["num_inliers"]
+            ratio = pose_entry["inlier_ratio"]
+            pts3D_1 = tracking_entry["pts1"]
 
-        if pose_entry is None:
-            continue
+            if num_inliers < 30 or ratio < 0.7:
+                print("[WARN] Weak RGB-D pose estimate, skipping pose accumulation")
+                continue
 
-        R = pose_entry["R"]
-        t = pose_entry["t"]
-        num_inliers = pose_entry["num_inliers"]
-        ratio = pose_entry["inlier_ratio"]
+            # Check convention
+            T_21 = pose_entry["T_21"]
+            T_cw_prev = global_poses[-1]
+            T_cw_new = T_21 @ T_cw_prev
+            global_poses.append(T_cw_new)
 
-        if num_inliers < 30 or ratio < 0.7:
-            print("[WARN] Weak RGB-D pose estimate, skipping pose accumulation")
-            continue
+            if is_good_keyframe(
+                pose_entry['num_inliers'],
+                pose_entry['inlier_ratio'],
+                #   points_entry['err_mean'],
+            ) and pts3D_1.shape[0] > 0:
+                tracking_acceptance["tracking_acceptance:"] += 1
+                init_kf0_id, init_kf1_id = initialize_map(
+                    slam_map=slam_map,
+                    frame_id0=i,
+                    frame_id1=i + 1,
+                    K=pose_entry["K"],
+                    R=pose_entry["R"],
+                    t=pose_entry["t"],
+                    kp1=tracking_entry["kp1"],
+                    kp2=tracking_entry["kp2"],
+                    des1=tracking_entry.get("des1"),
+                    des2=tracking_entry.get("des2"),
+                )
+                is_initialised = True
 
-        # Check convention
-        T_21 = pose_entry["T_21"]
-        T_cw_prev = global_poses[-1]
-        T_cw_new = T_21 @ T_cw_prev
-        global_poses.append(T_cw_new)
 
         if error_prints:
             print("[RGBD] Relative pose:")
