@@ -52,3 +52,20 @@ def estimate_depth(image_path, midas, transform, device, save_vis=True, out_path
         cv2.imwrite(str(out_path), depth_vis)
 
     return depth
+
+
+def midas_to_pseudo_depth(depth_pred, eps=1e-6):
+    depth_pred = np.maximum(depth_pred, eps)
+    depth = depth_pred.copy()
+
+    valid = np.isfinite(depth)
+    if not np.any(valid):
+        raise ValueError("MiDaS produced no valid depth values")
+
+    med = np.median(depth[valid])
+    if med < eps:
+        raise ValueError("Median MiDaS depth too small")
+
+    depth = depth / med
+    return depth.astype(np.float32)
+

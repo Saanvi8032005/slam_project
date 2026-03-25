@@ -48,7 +48,11 @@ from depth.util import (
     keypoints_with_depth,
     load_txt_entries,
 )
-from depth.MiDaS_monocular import load_midas, estimate_depth
+from depth.MiDaS_monocular import (
+    load_midas,
+    estimate_depth,
+    midas_to_pseudo_depth,
+)
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
@@ -56,6 +60,9 @@ RGB_DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
 RGB_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb.txt"
 DEPTH_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "depth"
 DEPTH_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "depth.txt"
+out_pc = PROJECT_ROOT / "outputs" / "aligning_pc" / "quick_cloud.xyz"
+out_file = PROJECT_ROOT / "outputs" / "tests" / "rgbd_vo_traj.txt"
+
 """
 FX = 525.0
 FY = 525.0
@@ -387,20 +394,50 @@ def save_rgbd_trajectory(global_poses, frames, output_file):
             f.write(f"{ts} {t_wc[0]} {t_wc[1]} {t_wc[2]} {qx} {qy} {qz} {qw}\n")
 
 
-def midas_to_pseudo_depth(depth_pred, eps=1e-6):
-    depth_pred = np.maximum(depth_pred, eps)
-    depth = depth_pred.copy()
+def save_quick_pointcloud_xyz(frames, global_poses, K, output_file, max_frames=100, stride=5):
+    """
+    Quick sanity-check point cloud from RGB-D frames.
+    Uses depth images + estimated poses and saves an .xyz file.
 
-    valid = np.isfinite(depth)
-    if not np.any(valid):
-        raise ValueError("MiDaS produced no valid depth values")
+    Assumes global_poses stores T_cw.
+    """
+    all_points = []
 
-    med = np.median(depth[valid])
-    if med < eps:
-        raise ValueError("Median MiDaS depth too small")
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
 
-    depth = depth / med
-    return depth.astype(np.float32)
+    n = min(max_frames, len(global_poses), len(frames))
+
+    for i in range(n):
+        depth_raw = cv.imread(str(frames[i]["depth_path"]), cv.IMREAD_UNCHANGED)
+        if depth_raw is None:
+            continue
+
+        depth = depth_to_meters(depth_raw)
+        T_cw = global_poses[i]
+
+        h, w = depth.shape
+        for v in range(0, h, stride):
+            for u in range(0, w, stride):
+                z = depth[v, u]
+                if not np.isfinite(z) or z <= 0:
+                    continue
+
+                x = (u - cx) * z / fx
+                y = (v - cy) * z / fy
+
+                p_cam = np.array([x, y, z, 1.0], dtype=np.float64)
+                T_wc = np.linalg.inv(T_cw)
+                p_world = (T_wc @ p_cam)[:3]
+                all_points.append(p_world)
+
+    if len(all_points) == 0:
+        print("[PIPE] No valid points to save.")
+        return
+
+    all_points = np.asarray(all_points, dtype=np.float64)
+    np.savetxt(output_file, all_points, fmt="%.6f %.6f %.6f")
+    print(f"[PIPE] Saved quick point cloud to {output_file}")
 
 
 if __name__ == "__main__":
@@ -409,9 +446,10 @@ if __name__ == "__main__":
     tracking_results = {}
     global_poses = [np.eye(4)]
     frames = load_rgbd_frames(RGB_TXT, DEPTH_TXT, RGB_DATA_DIR)
-    midas, transform, device = load_midas()
+    error_prints = True
+    rgb_to_gt_pose = build_rgb_to_gt_pose_map(GT_PATH, image_files, max_diff=0.02)
 
-    for i in range(len(image_files) - 1):
+    for i in range(10 - 1):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
 
@@ -421,18 +459,14 @@ if __name__ == "__main__":
         img1 = cv.imread(str(f1["rgb_path"]), cv.IMREAD_GRAYSCALE)
         img2 = cv.imread(str(f2["rgb_path"]), cv.IMREAD_GRAYSCALE)
 
-        depth1_pred = estimate_depth(str(f1["rgb_path"]), midas, transform, device, save_vis=False)
-        depth2_pred = estimate_depth(str(f2["rgb_path"]), midas, transform, device, save_vis=False)
-
-        depth1 = midas_to_pseudo_depth(depth1_pred)
-        depth2 = midas_to_pseudo_depth(depth2_pred)
+        depth1 = cv.imread(str(f1["depth_path"]), cv.IMREAD_UNCHANGED)
+        depth2 = cv.imread(str(f2["depth_path"]), cv.IMREAD_UNCHANGED)
 
         ts1 = f1["rgb_ts"]
         ts2 = f2["rgb_ts"]
 
         depth1_m = depth_to_meters(depth1)
         depth2_m = depth_to_meters(depth2)
-        print(depth1.shape, depth1.min(), depth1.max(), np.median(depth1))
 
         tracking_entry = stage_tracking(
             str(f1["rgb_path"]),
@@ -441,7 +475,7 @@ if __name__ == "__main__":
             tracking_results=tracking_results,
         )
 
-        pose_entry = stage_pose_rgbd(tracking_entry, depth1, K_RGBD)
+        pose_entry = stage_pose_rgbd(tracking_entry, depth1_m, K_RGBD)
 
         if pose_entry is None:
             continue
@@ -455,32 +489,33 @@ if __name__ == "__main__":
             print("[WARN] Weak RGB-D pose estimate, skipping pose accumulation")
             continue
 
-        print("[RGBD] Relative pose:")
-        print("R =\n", R)
-        print("t =\n", t.ravel())
-
         # Check convention
         T_21 = pose_entry["T_21"]
-
         T_cw_prev = global_poses[-1]
         T_cw_new = T_21 @ T_cw_prev
-
         global_poses.append(T_cw_new)
 
-        print(f"[PIPE] Pose count = {len(global_poses)}")
-        print(f"[RGBD] PnP inliers: {num_inliers}")
-        print(f"[RGBD] Inlier ratio: {ratio:.3f}")
-        print(f"[RGBD] Translation norm: {np.linalg.norm(t):.3f}")
+        if error_prints:
+            print("[RGBD] Relative pose:")
+            print("R =\n", R)
+            print("t =\n", t.ravel())
 
-        rgb_to_gt_pose = build_rgb_to_gt_pose_map(GT_PATH, image_files, max_diff=0.02)
-        R_gt, t_gt = relative_pose_from_rgb_ts(rgb_to_gt_pose, ts1, ts2)
+            print(f"[PIPE] Pose count = {len(global_poses)}")
+            print(f"[RGBD] PnP inliers: {num_inliers}")
+            print(f"[RGBD] Inlier ratio: {ratio:.3f}")
+            print(f"[RGBD] Translation norm: {np.linalg.norm(t):.3f}")
 
-        rot_err = rotation_error_deg(R, R_gt)
-        dir_err = translation_direction_error_deg(t, t_gt)
+            R_gt, t_gt = relative_pose_from_rgb_ts(rgb_to_gt_pose, ts1, ts2)
+            rot_err = rotation_error_deg(R, R_gt)
+            dir_err = translation_direction_error_deg(t, t_gt)
 
-        print(f"[RGBD][GT] Rotation error: {rot_err:.3f} deg")
-        print(f"[RGBD][GT] Translation direction error: {dir_err:.3f} deg")
+            #   check me
+            print(f"[RGBD][GT] Rotation error: {rot_err:.3f} deg")
+            print(f"[RGBD][GT] Translation direction error: {dir_err:.3f} deg")
 
-        out_file = PROJECT_ROOT / "outputs" / "tests" / "rgbd_vo_traj_MiDas.txt"
+    if False:
         save_rgbd_trajectory(global_poses, frames, out_file)
         print(f"[PIPE] Saved trajectory to {out_file}")
+
+    #   save_quick_pointcloud_xyz(frames, global_poses, K_RGBD, out_pc)
+

@@ -368,7 +368,7 @@ if __name__ == "__main__":
     init_kf1_id = None
     last_kf_id = None
 
-    for i in range(len(image_files) - 1):    # len(image_files) - 1
+    for i in range(10 - 1):    # len(image_files) - 1
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -380,12 +380,6 @@ if __name__ == "__main__":
         pair_id = f"{i:03d}"
         img1 = image_files[i]
         img2 = image_files[i + 1]
-        # Load depth images
-        depth1 = cv.imread(str(depth_files[i]), cv.IMREAD_UNCHANGED)
-        depth2 = cv.imread(str(depth_files[i + 1]), cv.IMREAD_UNCHANGED)
-        # Generate 3D points from depth
-        points_3d_1 = generate_3d_points_from_depth(depth1, K)
-        points_3d_2 = generate_3d_points_from_depth(depth2, K)
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
         R, t, K, num_inliers, inlier_ratio, rot_err, dir_err, _, _ = stage_pose(
