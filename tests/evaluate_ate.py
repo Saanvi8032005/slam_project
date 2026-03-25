@@ -182,11 +182,12 @@ if __name__=="__main__":
         plot_traj(ax,first_stamps,first_xyz_full.transpose().A,'-',"black","ground truth")
         plot_traj(ax,second_stamps,second_xyz_full_aligned.transpose().A,'-',"blue","estimated")
 
+        """
         label="difference"
         for (a,b),(x1,y1,z1),(x2,y2,z2) in zip(matches,first_xyz.transpose().A,second_xyz_aligned.transpose().A):
             ax.plot([x1,x2],[y1,y2],'-',color="red",label=label)
             label=""
-
+        """
         ax.legend()
             
         ax.set_xlabel('x [m]')
@@ -229,5 +230,18 @@ python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_ate.py \
     --save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/aligned_estimated.txt \
     --save_associations /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/associations.txt \
     --plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/depth_trajectory_plot.png \
+    --verbose
+"""
+
+"""
+python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_ate.py \
+    /Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
+    /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rgbd_vo_traj_MiDas.txt \
+    --offset 0.0 \
+    --scale 4 \
+    --max_difference 0.02 \
+    --save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/aligned_estimated.txt \
+    --save_associations /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/associations.txt \
+    --plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/MiDaS_depth_trajectory_plot.png \
     --verbose
 """

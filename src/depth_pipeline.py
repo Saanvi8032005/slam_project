@@ -48,6 +48,7 @@ from depth.util import (
     keypoints_with_depth,
     load_txt_entries,
 )
+from depth.MiDaS_monocular import load_midas, estimate_depth
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
@@ -55,6 +56,7 @@ RGB_DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
 RGB_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb.txt"
 DEPTH_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "depth"
 DEPTH_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "depth.txt"
+"""
 FX = 525.0
 FY = 525.0
 CX = 319.5
@@ -64,6 +66,12 @@ K_RGBD = np.array([
     [0, FY, CY],
     [0,  0,  1]
 ], dtype=np.float64)
+"""
+K_RGBD = np.array([
+    [517.3,   0.0, 318.6],
+    [0.0, 516.5, 255.3],
+    [0.0,   0.0,   1.0]
+], dtype=np.float32)
 
 
 def load_rgb_entries(rgb_txt_path, dataset_root):
@@ -379,14 +387,31 @@ def save_rgbd_trajectory(global_poses, frames, output_file):
             f.write(f"{ts} {t_wc[0]} {t_wc[1]} {t_wc[2]} {qx} {qy} {qz} {qw}\n")
 
 
+def midas_to_pseudo_depth(depth_pred, eps=1e-6):
+    depth_pred = np.maximum(depth_pred, eps)
+    depth = depth_pred.copy()
+
+    valid = np.isfinite(depth)
+    if not np.any(valid):
+        raise ValueError("MiDaS produced no valid depth values")
+
+    med = np.median(depth[valid])
+    if med < eps:
+        raise ValueError("Median MiDaS depth too small")
+
+    depth = depth / med
+    return depth.astype(np.float32)
+
+
 if __name__ == "__main__":
 
     timestamps, image_files = load_rgb_entries(RGB_TXT, RGB_DATA_DIR)
     tracking_results = {}
     global_poses = [np.eye(4)]
     frames = load_rgbd_frames(RGB_TXT, DEPTH_TXT, RGB_DATA_DIR)
+    midas, transform, device = load_midas()
 
-    for i in range(len(frames) - 1):
+    for i in range(len(image_files) - 1):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
 
@@ -396,14 +421,18 @@ if __name__ == "__main__":
         img1 = cv.imread(str(f1["rgb_path"]), cv.IMREAD_GRAYSCALE)
         img2 = cv.imread(str(f2["rgb_path"]), cv.IMREAD_GRAYSCALE)
 
-        depth1 = cv.imread(str(f1["depth_path"]), cv.IMREAD_UNCHANGED)
-        depth2 = cv.imread(str(f2["depth_path"]), cv.IMREAD_UNCHANGED)
+        depth1_pred = estimate_depth(str(f1["rgb_path"]), midas, transform, device, save_vis=False)
+        depth2_pred = estimate_depth(str(f2["rgb_path"]), midas, transform, device, save_vis=False)
+
+        depth1 = midas_to_pseudo_depth(depth1_pred)
+        depth2 = midas_to_pseudo_depth(depth2_pred)
 
         ts1 = f1["rgb_ts"]
         ts2 = f2["rgb_ts"]
 
         depth1_m = depth_to_meters(depth1)
         depth2_m = depth_to_meters(depth2)
+        print(depth1.shape, depth1.min(), depth1.max(), np.median(depth1))
 
         tracking_entry = stage_tracking(
             str(f1["rgb_path"]),
@@ -412,7 +441,7 @@ if __name__ == "__main__":
             tracking_results=tracking_results,
         )
 
-        pose_entry = stage_pose_rgbd(tracking_entry, depth1_m, K_RGBD)
+        pose_entry = stage_pose_rgbd(tracking_entry, depth1, K_RGBD)
 
         if pose_entry is None:
             continue
@@ -452,6 +481,6 @@ if __name__ == "__main__":
         print(f"[RGBD][GT] Rotation error: {rot_err:.3f} deg")
         print(f"[RGBD][GT] Translation direction error: {dir_err:.3f} deg")
 
-        out_file = PROJECT_ROOT / "outputs" / "tests" / "rgbd_vo_traj.txt"
+        out_file = PROJECT_ROOT / "outputs" / "tests" / "rgbd_vo_traj_MiDas.txt"
         save_rgbd_trajectory(global_poses, frames, out_file)
         print(f"[PIPE] Saved trajectory to {out_file}")
