@@ -1,5 +1,6 @@
 import numpy as np
-import cv2 as cv  # Add this import for OpenCV
+import cv2 as cv
+from keyframe_selection.keyframe_selec import MapPoint, Map, Keyframe
 
 
 def backproject_keypoint(kp, depth_img, fx, fy, cx, cy):
@@ -234,6 +235,36 @@ def load_txt_entries(txt_path, dataset_root):
     return entries
 
 
+def cull_weak_mappoints(slam_map, min_observations=2):
+    """
+    Remove MapPoints with too few observations.
+    Also clears references from keyframes.
+    """
+    to_remove = []
+
+    for mp_id, mp in slam_map.mappoints.items():
+        if len(mp.observations) < min_observations:
+            to_remove.append(mp_id)
+
+    if len(to_remove) == 0:
+        print("[MAP] No weak MapPoints to cull")
+        return 0
+
+    for mp_id in to_remove:
+        mp = slam_map.mappoints[mp_id]
+
+        for kf_id, kp_idx in list(mp.observations.items()):
+            if kf_id in slam_map.keyframes:
+                kf = slam_map.keyframes[kf_id]
+                if kf.kp_to_mp is not None and 0 <= kp_idx < len(kf.kp_to_mp):
+                    if kf.kp_to_mp[kp_idx] == mp_id:
+                        kf.kp_to_mp[kp_idx] = None
+
+        del slam_map.mappoints[mp_id]
+
+    print(f"[MAP] Culled {len(to_remove)} weak MapPoints")
+    return len(to_remove)
+
 
 
 def create_new_mappoints_from_depth_for_keyframe(
@@ -241,15 +272,17 @@ def create_new_mappoints_from_depth_for_keyframe(
     kf_id,
     depth_m,
     max_depth=5.0,
+    max_new_points=500,
 ):
     kf = slam_map.keyframes[kf_id]
     return create_mappoints_from_depth(
         slam_map=slam_map,
         kf_id=kf_id,
         depth_m=depth_m,
-        keypoints=kf.keypoints,
+        keypoints_xy=kf.keypoints_xy,
         descriptors=kf.descriptors,
         max_depth=max_depth,
+        max_new_points=max_new_points,
     )
 
 
@@ -257,13 +290,14 @@ def create_mappoints_from_depth(
     slam_map,
     kf_id,
     depth_m,
-    keypoints,
+    keypoints_xy,
     descriptors,
     max_depth=5.0,
+    max_new_points=300,
 ):
     """
     Create MapPoints directly from valid-depth keypoints in a keyframe.
-    Assumes keyframe pose is T_cw and keypoints are cv.KeyPoint.
+    Assumes keyframe pose is T_cw and keypoints_xy is (N, 2).
     """
     kf = slam_map.keyframes[kf_id]
     T_cw = kf.T_cw
@@ -275,14 +309,17 @@ def create_mappoints_from_depth(
 
     created = 0
 
-    for kp_idx, kp in enumerate(keypoints):
+    for kp_idx, (u_f, v_f) in enumerate(keypoints_xy):
+        if created >= max_new_points:
+            break
+
         # skip if already linked
-        if kp_idx in kf.kp_to_mp and kf.kp_to_mp[kp_idx] is not None:
+        if kf.kp_to_mp[kp_idx] is not None:
             continue
 
-        u, v = kp.pt
-        u = int(round(u))
-        v = int(round(v))
+
+        u = int(round(u_f))
+        v = int(round(v_f))
 
         if not (0 <= v < depth_m.shape[0] and 0 <= u < depth_m.shape[1]):
             continue
@@ -291,23 +328,18 @@ def create_mappoints_from_depth(
         if not np.isfinite(z) or z <= 0 or z > max_depth:
             continue
 
-        x = (u - cx) * z / fx
-        y = (v - cy) * z / fy
+        x = (u_f - cx) * z / fx
+        y = (v_f - cy) * z / fy
 
         p_cam = np.array([x, y, z, 1.0], dtype=np.float64)
         p_world = (T_wc @ p_cam)[:3]
 
-        mp_id = slam_map.next_mappoint_id
-        slam_map.next_mappoint_id += 1
-
-        mp = MapPoint(
-            id=mp_id,
+        mp_id = slam_map.add_mappoint(
             xyz=p_world,
             descriptor=descriptors[kp_idx],
+            observations={kf_id: int(kp_idx)},
         )
-        mp.observations[kf_id] = int(kp_idx)
 
-        slam_map.mappoints[mp_id] = mp
         kf.kp_to_mp[kp_idx] = mp_id
         created += 1
 
@@ -315,53 +347,137 @@ def create_mappoints_from_depth(
     return created
 
 
-def initialize_map_rgbd(
-    slam_map,
-    frame_id,
-    rgb_path,
-    depth_m,
-    K,
-):
-    """
-    Initialise map from a single RGB-D frame.
-    """
-    img = cv.imread(str(rgb_path), cv.IMREAD_GRAYSCALE)
-    if img is None:
-        raise ValueError(f"Could not load image {rgb_path}")
-
-    orb = cv.ORB_create(4000)
+def detect_orb_features(img, nfeatures=4000):
+    orb = cv.ORB_create(nfeatures)
     keypoints, descriptors = orb.detectAndCompute(img, None)
 
-    if keypoints is None or descriptors is None or len(keypoints) == 0:
-        raise ValueError("No ORB features found in initial RGB-D frame")
+    if keypoints is None:
+        keypoints = []
+    if descriptors is None:
+        descriptors = np.empty((0, 32), dtype=np.uint8)
 
-    T_cw = np.eye(4, dtype=np.float64)
+    keypoints_xy = np.array([kp.pt for kp in keypoints], dtype=np.float32) if len(keypoints) > 0 else np.empty((0, 2), dtype=np.float32)
+    return keypoints, keypoints_xy, descriptors
 
-    kf_id = slam_map.next_keyframe_id
-    slam_map.next_keyframe_id += 1
 
-    kf = Keyframe(
-        id=kf_id,
+def initialize_map_rgbd(
+    slam_map: Map,
+    frame_id: int,
+    img: np.ndarray,
+    depth_m: np.ndarray,
+    K: np.ndarray,
+    max_depth: float = 5.0,
+):
+    """
+    Initialise the SLAM map from a single RGB-D frame.
+    Creates:
+      - one keyframe at identity pose
+      - depth-born map points from valid ORB keypoints
+    """
+
+    keypoints, keypoints_xy, descriptors = detect_orb_features(img)
+
+    if keypoints_xy.shape[0] == 0:
+        raise ValueError("No ORB features found in initial frame")
+
+    T_cw0 = np.eye(4, dtype=np.float64)
+
+    kf0 = Keyframe(
+        kf_id=None,
         frame_id=frame_id,
-        T_cw=T_cw,
+        T_cw=T_cw0,
         K=K,
-        keypoints=keypoints,
+        keypoints_xy=keypoints_xy,
         descriptors=descriptors,
+        kp_to_mp=[None] * len(keypoints_xy),
     )
 
-    # ensure kp_to_mp exists
-    if not hasattr(kf, "kp_to_mp") or kf.kp_to_mp is None:
-        kf.kp_to_mp = {}
+    kf0_id = slam_map.add_keyframe(kf0)
 
-    slam_map.keyframes[kf_id] = kf
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
 
-    create_mappoints_from_depth(
-        slam_map=slam_map,
-        kf_id=kf_id,
-        depth_m=depth_m,
-        keypoints=keypoints,
-        descriptors=descriptors,
-    )
+    created = 0
 
-    print(f"[PIPE] RGB-D map initialised with KF{kf_id}")
-    return kf_id
+    for kp_idx, (u_f, v_f) in enumerate(keypoints_xy):
+        u = int(round(u_f))
+        v = int(round(v_f))
+
+        if not (0 <= v < depth_m.shape[0] and 0 <= u < depth_m.shape[1]):
+            continue
+
+        z = depth_m[v, u]
+        if not np.isfinite(z) or z <= 0 or z > max_depth:
+            continue
+
+        x = (u_f - cx) * z / fx
+        y = (v_f - cy) * z / fy
+
+        # since first pose is identity and world = camera0, this is already a world point
+        Pw = np.array([x, y, z], dtype=np.float64)
+
+        mp_id = slam_map.add_mappoint(
+            xyz=Pw,
+            descriptor=descriptors[kp_idx],
+            observations={kf0_id: kp_idx},
+        )
+
+        slam_map.keyframes[kf0_id].kp_to_mp[kp_idx] = mp_id
+        created += 1
+
+    print(f"[MAP] RGB-D initialised with KF{kf0_id}")
+    print(f"[MAP] Created {created} initial MapPoints")
+
+    return kf0_id
+
+
+def add_new_mappoints_from_depth_for_keyframe(
+    slam_map: Map,
+    kf_id: int,
+    depth_m: np.ndarray,
+    max_depth: float = 5.0,
+):
+    """
+    For a keyframe that already exists in the map:
+    create new MapPoints from keypoints that are not yet linked to any MapPoint.
+    """
+    kf = slam_map.keyframes[kf_id]
+    T_cw = kf.T_cw
+    T_wc = np.linalg.inv(T_cw)
+
+    fx, fy = kf.K[0, 0], kf.K[1, 1]
+    cx, cy = kf.K[0, 2], kf.K[1, 2]
+
+    created = 0
+
+    for kp_idx, (u_f, v_f) in enumerate(kf.keypoints_xy):
+        if kf.kp_to_mp[kp_idx] is not None:
+            continue
+
+        u = int(round(u_f))
+        v = int(round(v_f))
+
+        if not (0 <= v < depth_m.shape[0] and 0 <= u < depth_m.shape[1]):
+            continue
+
+        z = depth_m[v, u]
+        if not np.isfinite(z) or z <= 0 or z > max_depth:
+            continue
+
+        x = (u_f - cx) * z / fx
+        y = (v_f - cy) * z / fy
+
+        p_cam = np.array([x, y, z, 1.0], dtype=np.float64)
+        p_world = (T_wc @ p_cam)[:3]
+
+        mp_id = slam_map.add_mappoint(
+            xyz=p_world,
+            descriptor=kf.descriptors[kp_idx],
+            observations={kf_id: kp_idx},
+        )
+
+        kf.kp_to_mp[kp_idx] = mp_id
+        created += 1
+
+    print(f"[MAP] Added {created} new depth MapPoints in KF{kf_id}")
+    return created

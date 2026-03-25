@@ -236,12 +236,12 @@ python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_ate.py \
 """
 python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_ate.py \
     /Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
-    /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rgbd_vo_traj_MiDas.txt \
+    /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rgbd_slam_traj.txt \
     --offset 0.0 \
     --scale 4 \
     --max_difference 0.02 \
     --save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/aligned_estimated.txt \
     --save_associations /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/associations.txt \
-    --plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/MiDaS_depth_trajectory_plot.png \
+    --plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/SLAM_depth_trajectory_plot.png \
     --verbose
 """

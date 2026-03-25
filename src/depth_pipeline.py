@@ -34,7 +34,9 @@ from tests.pose_estimation_eval import (
 from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
 from keyframe_selection.keyframe_helpers import (
     initialize_map,  # Fixed function name
-    add_map_edge,
+    create_mappoints_from_triangulation,
+    insert_keyframe_if_needed,
+    kps_to_xy,
 )
 from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
 from utils.trajectory_utils import save_estimated_trajectory
@@ -47,12 +49,17 @@ from depth.util import (
     generate_3d_points_from_depth,
     keypoints_with_depth,
     load_txt_entries,
+    create_new_mappoints_from_depth_for_keyframe,
+    create_mappoints_from_depth,
+    initialize_map_rgbd,
+    cull_weak_mappoints,
 )
 from depth.MiDaS_monocular import (
     load_midas,
     estimate_depth,
     midas_to_pseudo_depth,
 )
+from pose_estimation.PnP import run_pnp_for_frame
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
@@ -442,104 +449,133 @@ def save_quick_pointcloud_xyz(frames, global_poses, K, output_file, max_frames=1
 
 if __name__ == "__main__":
 
-    timestamps, image_files = load_rgb_entries(RGB_TXT, RGB_DATA_DIR)
-    tracking_results = {}
-    global_poses = [np.eye(4)]
     frames = load_rgbd_frames(RGB_TXT, DEPTH_TXT, RGB_DATA_DIR)
-    error_prints = True
-    rgb_to_gt_pose = build_rgb_to_gt_pose_map(GT_PATH, image_files, max_diff=0.02)
-    is_initialised = False
-    slam_map = Map()
-    tracking_acceptance = {"tracking_acceptance:": 0}
 
-    for i in range(10 - 1):
-        print("\n" + "="*200)
-        print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
+    slam_map = Map()
+    is_initialized = False
+    last_kf_id = None
+
+    pnp_success = 0
+    pnp_failed = 0
+    pnp_weak = 0
+    kf_inserted = 0
+    kf_reused = 0
+
+    for i in range(len(frames)):
+        print("\n" + "=" * 120)
+        print(f"[PIPE] Processing frame {i}")
 
         f1 = frames[i]
-        f2 = frames[i + 1]
-
         img1 = cv.imread(str(f1["rgb_path"]), cv.IMREAD_GRAYSCALE)
-        img2 = cv.imread(str(f2["rgb_path"]), cv.IMREAD_GRAYSCALE)
-
         depth1 = cv.imread(str(f1["depth_path"]), cv.IMREAD_UNCHANGED)
-        depth2 = cv.imread(str(f2["depth_path"]), cv.IMREAD_UNCHANGED)
-
-        ts1 = f1["rgb_ts"]
-        ts2 = f2["rgb_ts"]
-
         depth1_m = depth_to_meters(depth1)
-        depth2_m = depth_to_meters(depth2)
 
-        if not is_initialised:
-            tracking_entry = stage_tracking(
-                str(f1["rgb_path"]),
-                str(f2["rgb_path"]),
-                pair_id=i,
-                tracking_results=tracking_results,
-            )
-            pose_entry = stage_pose_rgbd(tracking_entry, depth1_m, K_RGBD)
-            if pose_entry is None:
-                continue
-
-            R = pose_entry["R"]
-            t = pose_entry["t"]
-            num_inliers = pose_entry["num_inliers"]
-            ratio = pose_entry["inlier_ratio"]
-            pts3D_1 = tracking_entry["pts1"]
-
-            if num_inliers < 30 or ratio < 0.7:
-                print("[WARN] Weak RGB-D pose estimate, skipping pose accumulation")
-                continue
-
-            # Check convention
-            T_21 = pose_entry["T_21"]
-            T_cw_prev = global_poses[-1]
-            T_cw_new = T_21 @ T_cw_prev
-            global_poses.append(T_cw_new)
-
-            if is_good_keyframe(
-                pose_entry['num_inliers'],
-                pose_entry['inlier_ratio'],
-                #   points_entry['err_mean'],
-            ) and pts3D_1.shape[0] > 0:
-                tracking_acceptance["tracking_acceptance:"] += 1
-                init_kf0_id, init_kf1_id = initialize_map(
+        if not is_initialized:
+            try:
+                last_kf_id = initialize_map_rgbd(
                     slam_map=slam_map,
-                    frame_id0=i,
-                    frame_id1=i + 1,
-                    K=pose_entry["K"],
-                    R=pose_entry["R"],
-                    t=pose_entry["t"],
-                    kp1=tracking_entry["kp1"],
-                    kp2=tracking_entry["kp2"],
-                    des1=tracking_entry.get("des1"),
-                    des2=tracking_entry.get("des2"),
+                    frame_id=i,
+                    img=img1,
+                    depth_m=depth1_m,
+                    K=K_RGBD,
                 )
-                is_initialised = True
+                is_initialized = True
+            except Exception as e:
+                print(f"[PIPE] RGB-D init failed: {e}")
+            continue
 
+        # current frame features
+        orb = cv.ORB_create(4000)
+        keypoints, descriptors = orb.detectAndCompute(img1, None)
 
-        if error_prints:
-            print("[RGBD] Relative pose:")
-            print("R =\n", R)
-            print("t =\n", t.ravel())
+        if keypoints is None or descriptors is None or len(keypoints) == 0:
+            print("[PIPE] No features in current frame")
+            continue
 
-            print(f"[PIPE] Pose count = {len(global_poses)}")
-            print(f"[RGBD] PnP inliers: {num_inliers}")
-            print(f"[RGBD] Inlier ratio: {ratio:.3f}")
-            print(f"[RGBD] Translation norm: {np.linalg.norm(t):.3f}")
+        T_cw_cur, ninliers, inlier_kp_to_mp = run_pnp_for_frame(
+            slam_map=slam_map,
+            last_kf_id=last_kf_id,
+            keypoints=keypoints,
+            descriptors=descriptors,
+            K=slam_map.keyframes[last_kf_id].K,
+            kf_window=5,
+            min_observations=1,
+        )
 
-            R_gt, t_gt = relative_pose_from_rgb_ts(rgb_to_gt_pose, ts1, ts2)
-            rot_err = rotation_error_deg(R, R_gt)
-            dir_err = translation_direction_error_deg(t, t_gt)
+        if T_cw_cur is None:
+            print("[PIPE] PnP failed")
+            pnp_failed += 1
+            continue
 
-            #   check me
-            print(f"[RGBD][GT] Rotation error: {rot_err:.3f} deg")
-            print(f"[RGBD][GT] Translation direction error: {dir_err:.3f} deg")
+        pnp_success += 1
+        print(f"[PIPE] PnP succeeded with {ninliers} inliers")
 
-    if False:
-        save_rgbd_trajectory(global_poses, frames, out_file)
-        print(f"[PIPE] Saved trajectory to {out_file}")
+        if ninliers < 30:
+            pnp_weak += 1
+            print("[PIPE] PnP too weak for KF insertion")
+            continue
 
-    #   save_quick_pointcloud_xyz(frames, global_poses, K_RGBD, out_pc)
+        kf_j_id = insert_keyframe_if_needed(
+            slam_map=slam_map,
+            frame_id=i,
+            T_cw=T_cw_cur,
+            K=slam_map.keyframes[last_kf_id].K,
+            keypoints_xy=kps_to_xy(keypoints),
+            descriptors=descriptors,
+            tracking_acceptance={"tracking_acceptance:": 0},  # or your real tracker dict
+        )
+
+        if kf_j_id == last_kf_id:
+            print("[PIPE] Same keyframe returned, skipping")
+            kf_reused += 1
+            continue
+
+        kf_inserted += 1
+        kf_j = slam_map.keyframes[kf_j_id]
+
+        # attach already-observed MapPoints from PnP inliers
+        for kp_idx, mp_id in inlier_kp_to_mp.items():
+            kf_j.kp_to_mp[kp_idx] = mp_id
+            slam_map.mappoints[mp_id].observations[kf_j_id] = int(kp_idx)
+
+        # add new map points from depth for unmatched current keypoints
+        created = create_new_mappoints_from_depth_for_keyframe(
+            slam_map=slam_map,
+            kf_id=kf_j_id,
+            depth_m=depth1_m,
+            max_new_points=300,
+        )
+        print(f"[PIPE] Added {created} new depth MapPoints in KF{kf_j_id}")
+
+        # add odometry edge
+        last_kf = slam_map.keyframes[last_kf_id]
+        T_rel = T_cw_cur @ np.linalg.inv(last_kf.T_cw)
+
+        slam_map.add_edge(
+            Edge(
+                kf_i=last_kf_id,
+                kf_j=kf_j_id,
+                T_ij=T_rel,
+                edge_type="odometry",
+            )
+        )
+
+        if kf_j_id % 5 == 0:
+            cull_weak_mappoints(slam_map, min_observations=2)
+
+        last_kf_id = kf_j_id
+
+    optimise_pose_graph(slam_map, max_nfev=50, robust=True, verbose=2)
+    print_map(slam_map)
+
+    estimated_trajectory_file = PROJECT_ROOT / "outputs" / "tests" / "rgbd_slam_traj.txt"
+    save_estimated_trajectory(slam_map, [f["rgb_path"] for f in frames], estimated_trajectory_file)
+
+    print(f"[PIPE] Estimated trajectory saved to {estimated_trajectory_file}")
+    print(f"[MAP] Number of MapPoints: {len(slam_map.mappoints)}")
+    print("PnP success:", pnp_success)
+    print("PnP failed:", pnp_failed)
+    print("PnP weak (<30 inliers):", pnp_weak)
+    print("Keyframes inserted:", kf_inserted)
+    print("Frames reused existing keyframe:", kf_reused)
 
