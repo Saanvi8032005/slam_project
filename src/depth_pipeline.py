@@ -432,11 +432,11 @@ if __name__ == "__main__":
 
         # Check convention
         T_21 = pose_entry["T_21"]
-        T_12 = np.linalg.inv(T_21)
 
-        T_w1 = global_poses[-1]
-        T_w2 = T_w1 @ T_12
-        global_poses.append(T_w2)
+        T_cw_prev = global_poses[-1]
+        T_cw_new = T_21 @ T_cw_prev
+
+        global_poses.append(T_cw_new)
 
         print(f"[PIPE] Pose count = {len(global_poses)}")
         print(f"[RGBD] PnP inliers: {num_inliers}")
