@@ -38,19 +38,33 @@ def load_calibration():
     """
     Load camera intrinsic matrix and distortion coefficients.
     """
-    K = np.array([
-        [517.3,   0.0, 318.6],
-        [0.0, 516.5, 255.3],
-        [0.0,   0.0,   1.0]
-    ], dtype=np.float32)
-
-    dist = np.array([
-        -0.29426946,
-        0.12324915,
-        0.00113851,
-        -0.00013802,
-        0.01020549
-    ], dtype=np.float32)
+    f2 = False
+    if f2:
+        K = np.array([
+            [520.9,   0.0, 325.1],
+            [0.0, 521.0, 249.7],
+            [0.0,   0.0,   1.0]
+        ], dtype=np.float32)
+        dist = np.array([
+            0.2312,
+            -0.7849,
+            -0.0033,
+            -0.0001,
+            0.9172
+        ], dtype=np.float32)
+    else:
+        K = np.array([
+            [517.3,   0.0, 318.6],
+            [0.0, 516.5, 255.3],
+            [0.0,   0.0,   1.0]
+        ], dtype=np.float32)
+        dist = np.array([
+            -0.29426946,
+            0.12324915,
+            0.00113851,
+            -0.00013802,
+            0.01020549
+        ], dtype=np.float32)
     return K, dist
 
 
@@ -90,7 +104,7 @@ def pose_estimate(pts1, pts2, idx_i=None, idx_j=None, log_err: bool | None = Non
     print(f"[POSE] Median flow: {median_flow:.2f} px")
     if median_flow < PARALLAX_PX_THRESH:
         print(f"[POSE] Low parallax: median flow {median_flow:.2f} px -> skipping pair")
-        return None, None, K, None, 0, 0.0
+        return None, None, K, None, 0, 0.0, None, None, None
 
     # Undistort points
     #   pts1 = cv.undistortPoints(pts1.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
@@ -130,7 +144,7 @@ def pose_estimate(pts1, pts2, idx_i=None, idx_j=None, log_err: bool | None = Non
     # Check if R is a valid rotation matrix
     if not (np.allclose(np.dot(R.T, R), np.eye(3), atol=1e-6) and np.isclose(np.linalg.det(R), 1.0)):
         print("[POSE][ERROR] Recovered R is not a valid rotation matrix")
-        return None, None, K, None, 0, 0.0
+        return None, None, K, None, 0, 0.0, None, None, None
 
     # Debugging: Check inliers after recoverPose
     maskPose_bool = maskPose.ravel().astype(bool)
@@ -144,13 +158,13 @@ def pose_estimate(pts1, pts2, idx_i=None, idx_j=None, log_err: bool | None = Non
 
     if num_inliers_pose < 50 or ratio_pose < 0.1:
         print(f"[POSE][WARN] Pose invalid: inliers {num_inliers_pose}/{num_considered} ({ratio_pose:.2f}) -> skipping")
-        return None, None, K, None, num_inliers_pose, ratio_pose
+        return None, None, K, None, num_inliers_pose, ratio_pose, None, None, None
 
     # Cheirality (physical validity) gate
     cheirality_ratio = num_inliers_pose / max(E_inliers, 1)
     if cheirality_ratio < 0.2:
         print("[POSE][WARN] Weak cheirality; skipping pose")
-        return None, None, K, None, num_inliers_pose, ratio_pose
+        return None, None, K, None, num_inliers_pose, ratio_pose, None, None, None
     
     print("[POSE] Rotation R:\n", R)
     print("[POSE] Translation t^T\n", t.T)

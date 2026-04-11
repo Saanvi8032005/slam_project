@@ -27,9 +27,9 @@ from tests.pose_estimation_eval import (
         translation_direction_error_deg,
         GT_PATH,
     )
-from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
+from keyframe_selection.keyframe_selec import Map, Edge
 from keyframe_selection.keyframe_helpers import (
-    initialize_map,  # Fixed function name
+    initialize_map,
     create_mappoints_from_triangulation,
     insert_keyframe_if_needed,
     kps_to_xy,
@@ -39,7 +39,8 @@ from utils.trajectory_utils import save_estimated_trajectory
 from pose_estimation.PnP import run_pnp_for_frame
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
-TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
+estimated_trajectory_file = PROJECT_ROOT / "report_results" / "pipeline2" / "desk1" / "tests.txt"
+cloud_file = PROJECT_ROOT / "report_results" / "pipeline2" / "desk1" / "final_cloud.xyz"
 
 
 def load_image_files():
@@ -356,63 +357,6 @@ def match_keyframes_for_triangulation(kf_i, kf_j, ratio=0.75):
     return good_matches
 
 
-def _skew(v):
-    x, y, z = v.reshape(3)
-    return np.array([
-        [0, -z, y],
-        [z, 0, -x],
-        [-y, x, 0]
-    ], dtype=float)
-
-
-def _triangulate_points_pose_consistent(pts1, pts2, R, t, K):
-    """
-    Triangulate points using the provided relative pose:
-        cam1: P1 = K [I | 0]
-        cam2: P2 = K [R | t]
-
-    Returns:
-        pts3D : (N, 3)
-    """
-    P1 = K @ np.hstack([np.eye(3), np.zeros((3, 1))])
-    P2 = K @ np.hstack([R, t.reshape(3, 1)])
-
-    pts4D = cv.triangulatePoints(
-        P1, P2,
-        pts1.T.astype(np.float64),
-        pts2.T.astype(np.float64)
-    )
-    pts3D = (pts4D[:3] / pts4D[3]).T
-    return pts3D
-
-
-def _compute_depths_in_both_cameras(pts3D, R, t):
-    """
-    cam1 coordinates: X1 = X
-    cam2 coordinates: X2 = R X + t
-    """
-    z1 = pts3D[:, 2]
-    X2 = (R @ pts3D.T + t.reshape(3, 1)).T
-    z2 = X2[:, 2]
-    return z1, z2
-
-
-def _reproject_points(pts3D, K, R=None, t=None):
-    """
-    Reproject 3D points into a camera.
-    If R,t are None -> first camera [I|0]
-    Else -> second camera [R|t]
-    """
-    if R is None:
-        Xc = pts3D
-    else:
-        Xc = (R @ pts3D.T + t.reshape(3, 1)).T
-
-    proj = (K @ Xc.T).T
-    uv = proj[:, :2] / proj[:, 2:3]
-    return uv
-
-
 def _parallax_angles_deg(pts3D, R, t):
     """
     Compute parallax angle between the two viewing rays.
@@ -448,10 +392,8 @@ def triangulate_new_features_between_keyframes(
     t_rel,
     K,
     ratio=0.75,
-    max_reproj_err=2.0,
     min_parallax_deg=1.0,
     min_num_created=8,
-    max_new_points=1000,  # Cap new MapPoints per pair
 ):
     """
     Triangulate new MapPoints between two keyframes using the KNOWN relative pose.
@@ -497,60 +439,42 @@ def triangulate_new_features_between_keyframes(
     median_flow = np.median(flow)
     print(f"[MAP] Median pixel flow: {median_flow:.2f}px")
 
-    if median_flow < 5.0:
+    if median_flow < 3.0:
         print("[MAP] Too little image motion for reliable triangulation")
         return 0
 
-    # 3. triangulate directly with your known pose
-    pts3D = _triangulate_points_pose_consistent(pts1, pts2, R_rel, t_rel, K)
+    pts3D, _, keep_idx = triangulate_from_data(
+        pts1=pts1,
+        pts2=pts2,
+        R=R_rel,
+        t=t_rel,
+        K=K,
+        mask=None,          # already filtered before this stage
+        save_file=False,
+        out_name=None,
+    )
 
-    if pts3D is None or len(pts3D) == 0:
-        print("[MAP] No points triangulated")
-        return 0
-
-    # 4a. finite check
-    finite_mask = np.isfinite(pts3D).all(axis=1)
-
-    # 4b. cheirality / positive depth
-    z1, z2 = _compute_depths_in_both_cameras(pts3D, R_rel, t_rel)
-    depth_mask = (z1 > 1e-6) & (z2 > 1e-6)
-
-    # 4c. reprojection error in both views
-    uv1 = _reproject_points(pts3D, K)
-    uv2 = _reproject_points(pts3D, K, R_rel, t_rel)
-
-    err1 = np.linalg.norm(uv1 - pts1, axis=1)
-    err2 = np.linalg.norm(uv2 - pts2, axis=1)
-    reproj_mask = (err1 < max_reproj_err) & (err2 < max_reproj_err)
+    # keep_idx maps surviving 3D points back to original pts1/pts2 / idx_i/idx_j
+    idx_i_keep = idx_i[keep_idx]
+    idx_j_keep = idx_j[keep_idx]
 
     # 4d. parallax
     parallax_deg = _parallax_angles_deg(pts3D, R_rel, t_rel)
     parallax_mask = parallax_deg > min_parallax_deg
-
-    keep_mask = finite_mask & depth_mask & reproj_mask & parallax_mask
+    
+    keep_mask = parallax_mask
 
     n_keep = int(np.sum(keep_mask))
-    print(f"[MAP] finite:      {np.sum(finite_mask)} / {len(matches)}")
-    print(f"[MAP] positive z:  {np.sum(depth_mask)} / {len(matches)}")
-    print(f"[MAP] reproj ok:   {np.sum(reproj_mask)} / {len(matches)}")
-    print(f"[MAP] parallax ok: {np.sum(parallax_mask)} / {len(matches)}")
-    print(f"[MAP] final kept:  {n_keep} / {len(matches)}")
+    print(f"[MAP] parallax ok: {np.sum(parallax_mask)} / {len(pts3D)}")
+    print(f"[MAP] final kept:  {n_keep} / {len(pts3D)}")
 
     if n_keep < min_num_created:
         print("[MAP] Too few valid triangulated points after filtering")
         return 0
 
-    if n_keep > max_new_points:
-        keep_indices = np.where(keep_mask)[0]
-        # score: smaller reprojection error is better
-        total_err = err1 + err2
-        ranked = keep_indices[np.argsort(total_err[keep_indices])]
-        keep_mask[:] = False
-        keep_mask[ranked[:max_new_points]] = True
-
     pts3D_keep = pts3D[keep_mask]
-    idx_i_keep = idx_i[keep_mask]
-    idx_j_keep = idx_j[keep_mask]
+    idx_i_keep = idx_i_keep[keep_mask]
+    idx_j_keep = idx_j_keep[keep_mask]
 
     created = create_mappoints_from_triangulation(
         slam_map=slam_map,
@@ -561,7 +485,6 @@ def triangulate_new_features_between_keyframes(
         idx_j=idx_j_keep,
     )
 
-    #   Debugging
     baseline = np.linalg.norm(t_rel)
     print(f"[MAP] Relative baseline norm: {baseline:.4f}")
 
@@ -613,9 +536,72 @@ def save_slam_map_points(slam_map):
     pts = np.array(pts, dtype=float)
     pts = pts[np.isfinite(pts).all(axis=1)]
 
-    out_path = PROJECT_ROOT / "outputs" / "aligning_pc" / "post_pnp_cloud.xyz"
+    out_path = PROJECT_ROOT / "outputs" / "debugging_pnp" / "post_pnp_cloud.xyz"
     np.savetxt(out_path, pts)
     print(f"[PIPE] Saved {len(pts)} SLAM map points to {out_path}")
+
+
+def save_slam_map_points_with_colour(slam_map, output_file):
+    """
+    Save the SLAM map points (3D coordinates) along with their RGB color values to a file.
+    Output format: X Y Z R G B
+    """
+    all_points = []
+
+    for mappoint in slam_map.mappoints.values():
+        # Extract 3D coordinates
+        x, y, z = mappoint.xyz
+
+        # Extract RGB color (assuming mappoint has an attribute `color` as [R, G, B])
+        # If `color` is not directly available, you need to compute it from observations.
+        if hasattr(mappoint, "color"):
+            r, g, b = mappoint.color
+        else:
+            # Default to white if no color is available
+            r, g, b = 255, 255, 255
+
+        # Append the point with color
+        all_points.append([x, y, z, int(r), int(g), int(b)])
+
+    if len(all_points) == 0:
+        print("[PIPE] No valid points to save.")
+        return
+
+    # Save to file
+    all_points = np.asarray(all_points, dtype=np.float64)
+    np.savetxt(output_file, all_points, fmt="%.6f %.6f %.6f %d %d %d")
+    print(f"[PIPE] Saved SLAM map points with color to {output_file}")
+
+
+def safe_translation_direction_error_deg(t_est, t_gt, min_norm=1e-3):
+    """
+    Return None if either translation is too small for a meaningful direction comparison.
+    """
+    n_est = float(np.linalg.norm(t_est))
+    n_gt = float(np.linalg.norm(t_gt))
+    if n_est < min_norm or n_gt < min_norm:
+        return None
+    return translation_direction_error_deg(t_est, t_gt)
+
+
+def is_good_pnp_for_mapping(
+    ninliers: int,
+    reproj_mean: float,
+    t_rel_norm: float,
+    rot_err_deg: float | None = None,
+    dir_err_deg: float | None = None,
+):
+    """
+    Strict gate for whether a PnP pose is trusted enough to CREATE NEW MAP POINTS.
+    Tracking can still continue even if this returns False.
+    """
+    if ninliers < 120:
+        return False
+    if reproj_mean is None or reproj_mean > 1.0:
+        return False
+    if t_rel_norm < 1e-3:
+        return False
+    return True
 
 
 if __name__ == "__main__":
@@ -626,7 +612,7 @@ if __name__ == "__main__":
     points_results = {}
     tracking_acceptance = {"tracking_acceptance:": 0}
 
-  
+    slam_map = Map()
     is_initialized = False
     init_kf0_id = None
     init_kf1_id = None
@@ -638,7 +624,22 @@ if __name__ == "__main__":
     kf_inserted = 0
     kf_reused = 0
 
-    for i in range(35 - 1):
+    rot_errors_tri = []
+    trans_dir_errors_tri = []
+    reproj_errors_tri = []
+
+    rot_errors_pnp = []
+    trans_dir_errors_pnp = []
+    reproj_errors_pnp = []
+    missing_pair = 0
+
+    rgb_to_gt_pose = build_rgb_to_gt_pose_map(
+        GT_PATH,
+        image_files,
+        max_diff=0.02
+    )
+
+    for i in range(len(image_files) - 1):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
@@ -647,6 +648,8 @@ if __name__ == "__main__":
         pair_id = f"{i:03d}"
         img1 = image_files[i]
         img2 = image_files[i + 1]
+        ts1 = float(Path(img1).stem)
+        ts2 = float(Path(img2).stem)
 
         if not is_initialized:
             tracking_entry = stage_tracking(
@@ -654,7 +657,7 @@ if __name__ == "__main__":
                 img2,
                 pair_id,
                 tracking_results)
-            pose_entry, rot_err, dir_err = stage_pose(tracking_entry, pose_results, img1, img2)
+            pose_entry, rot_err_tri, dir_err_tri = stage_pose(tracking_entry, pose_results, img1, img2)
             if pose_entry is None:
                 print(f"[PIPE] Skipping pair {pair_id} due to pose estimation failure")
                 continue
@@ -664,6 +667,13 @@ if __name__ == "__main__":
             pts3D = points_entry["pts3D"]
             triang_filter = points_entry["triang_filter"]
 
+            if rot_err_tri is not None:
+                rot_errors_tri.append(rot_err_tri)
+            if dir_err_tri is not None:
+                trans_dir_errors_tri.append(dir_err_tri)
+            if "err_mean" in points_entry and points_entry["err_mean"] is not None:
+                reproj_errors_tri.append(points_entry["err_mean"])
+        
             if is_good_keyframe(
                 pose_entry['num_inliers'],
                 pose_entry['inlier_ratio'],
@@ -701,7 +711,7 @@ if __name__ == "__main__":
                 tracking_results
             )
 
-            T_cw_cur, ninliers, inlier_kp_to_mp = run_pnp_for_frame(
+            T_cw_cur, ninliers, inlier_kp_to_mp, stats= run_pnp_for_frame(
                 slam_map=slam_map,
                 last_kf_id=last_kf_id,
                 keypoints=tracking_entry["kp2"],
@@ -710,13 +720,17 @@ if __name__ == "__main__":
                 kf_window=5,
                 min_observations=2,
             )
-
             if T_cw_cur is None:
                 print("[PIPE] PnP failed")
                 pnp_failed += 1
                 continue
             pnp_success += 1
             print(f"[PIPE] PnP succedded with {ninliers} inliers")
+
+            if "reprojection_error" in stats and stats["reprojection_error"] is not None:
+                reproj_er = stats["reprojection_error"]
+                reproj_errors_pnp.append(reproj_er)
+
             if ninliers < 30:
                 pnp_weak += 1
                 print("[PIPE] PnP too weak for KF insertion")
@@ -764,8 +778,30 @@ if __name__ == "__main__":
 
             R_rel = T_rel[:3, :3]
             t_rel = T_rel[:3, 3]
+            try:
+                R_gt, t_gt = relative_pose_from_rgb_ts(rgb_to_gt_pose, ts1, ts2)
+            except KeyError as e:
+                print(f"[WARNING] {e}")
+                missing_pair += 1
+                continue  # Skip this pair
+            rot_err_pnp = rotation_error_deg(R_rel, R_gt)
+            dir_err_pnp = translation_direction_error_deg(t_rel, t_gt)
+            rot_errors_pnp.append(rot_err_pnp)
+            trans_dir_errors_pnp.append(dir_err_pnp)
 
-            #   debugging
+            print("last_kf_id:", last_kf_id, "kf_j_id:", kf_j_id)
+            print("last frame:", slam_map.keyframes[last_kf_id].frame_id)
+            print("cur frame:", slam_map.keyframes[kf_j_id].frame_id)
+            print("loop i:", i)
+
+            print("t_rel:", t_rel)
+            print("||t_rel||:", np.linalg.norm(t_rel))
+            print("t_gt:", t_gt)
+            print("||t_gt||:", np.linalg.norm(t_gt))
+
+            print("dir err:", translation_direction_error_deg(t_rel, t_gt))
+            print("dir err flipped:", translation_direction_error_deg(t_rel, -t_gt))
+
             print(f"[PIPE] KF{last_kf_id} -> KF{kf_j_id}")
             print("det(R_rel):", np.linalg.det(R_rel))
             print("t_rel:", t_rel)
@@ -785,13 +821,8 @@ if __name__ == "__main__":
                 cull_weak_mappoints(slam_map, min_observations=2)
             last_kf_id = kf_j_id
 
-    # changed nothing 
-    optimise_pose_graph(slam_map, max_nfev=50, robust=True, verbose=2) 
-    print_map(slam_map)
-
     if True:
         # Save the estimated trajectory
-        estimated_trajectory_file = PROJECT_ROOT / "outputs" / "tests" / "pnp_tests.txt"
         save_estimated_trajectory(slam_map, image_files, estimated_trajectory_file)
 
         print(f"[PIPE] Estimated trajectory saved to {estimated_trajectory_file}")
@@ -800,10 +831,18 @@ if __name__ == "__main__":
     print(f"[MAP] Number of MapPoints: {len(slam_map.mappoints)}")
 
     if True:
-        save_slam_map_points(slam_map)
+        save_slam_map_points_with_colour(slam_map, cloud_file)
 
+    print(f"No. of Missing Pairs", missing_pair)
     print("PnP success:", pnp_success)
     print("PnP failed:", pnp_failed)
     print("PnP weak (<30 inliers):", pnp_weak)
     print("Keyframes inserted:", kf_inserted)
     print("Frames reused existing keyframe:", kf_reused)
+
+    print_stats("PnP Rotation Errors (deg)", rot_errors_pnp)
+    print_stats("PnP Translation Errors", trans_dir_errors_pnp)
+    print_stats("PnP Reprojection Errors (px)", reproj_errors_pnp)
+    print_stats("Tri Rotation Errors (deg)", rot_errors_tri)
+    print_stats("Tri Translation Errors", trans_dir_errors_tri)
+    print_stats("Tri Reprojection Errors (px)", reproj_errors_tri)

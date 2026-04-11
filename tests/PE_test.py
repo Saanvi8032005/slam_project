@@ -10,7 +10,7 @@ from src.tracking.lsd_tracking import lsd
 from src.pose_estimation.pose_estimation import pose_estimate
 
 
-GT_PATH = PROJECT_ROOT / "data" / "ground_truth" / "groundtruth.txt"
+GT_PATH = PROJECT_ROOT / "data" / "rgb_dataset" / "groundtruth.txt"
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 
 
@@ -139,7 +139,11 @@ def load_image_files():
 if __name__ == "__main__":
     image_files = load_image_files()
     error_dict = {}
-    for i in range(25):
+    rot_errors = []
+    dir_errors = []
+    method = 'essential_matrix'
+
+    for i in range(len(image_files) - 1):
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
         print(f"[PIPE] Image 2: {image_files[i + 1]}")
@@ -153,9 +157,9 @@ if __name__ == "__main__":
         print("[TEST] img1_path:", img1_path)
         print("[TEST] img2_path:", img2_path)
 
-        MATCHER = "flann"
+        MATCHER = "bf"
         FILTER = "hist"
-        pts1, pts2, kp1, kp2, matches = matching(
+        pts1, pts2, kp1, kp2, _, _, _, _, _ = matching(
                 matcher=MATCHER,
                 filter_method=FILTER,
                 img1_path=img1_path,
@@ -176,22 +180,38 @@ if __name__ == "__main__":
             np.float32(pts2_line).reshape(-1, 2)
         ])
         """
-        R_est, t_est, K, maskPose = pose_estimate(pts1, pts2)
+        if method == 'essential_matrix':
+            R_est, t_est, K, _, _, _, _, _, _ = pose_estimate(pts1, pts2)
+        elif method == 'PnP_chaining':
+            print("adding")
+        else:
+            raise ValueError(f"Unknown method: {method}")
 
         R_gt, t_gt = relative_pose_from_gt(GT_PATH, ts1, ts2)
 
-        rot_err = rotation_error_deg(R_est, R_gt)
-        dir_err = translation_direction_error_deg(t_est, t_gt)
+        # Validate R_est before using it
+        if R_est is None:
+            print("[ERROR] Pose estimation failed, skipping rotation error computation.")
+        else:
+            rot_err = rotation_error_deg(R_est, R_gt)
+            dir_err = translation_direction_error_deg(t_est, t_gt)
+            print(f"[RESULT] Rotation error: {rot_err:.3f} deg")
+            print(f"[RESULT] Translation direction err: {dir_err:.3f} deg")
 
-        # --- store result in dictionary ---
-        key = f"{img1_path.name} -> {img2_path.name}"
-        error_dict[key] = {
-            "rotation_error_deg": rot_err,
-            "translation_dir_error_deg": dir_err,
-        }
+            # --- store result in dictionary ---
+            key = f"{img1_path.name} -> {img2_path.name}"
+            error_dict[key] = {
+                "rotation_error_deg": rot_err,
+                "translation_dir_error_deg": dir_err,
+            }
 
     print("\n================ POSE ERROR SUMMARY ================\n")
-    for pair, metrics in error_dict.items():
-        print(f"Image Pair: {pair}")
-        print(f"   Rotation error:            {metrics['rotation_error_deg']:.3f} deg")
-        print(f"   Translation direction err: {metrics['translation_dir_error_deg']:.3f} deg\n")
+    #   for pair, metrics in error_dict.items():
+        #   print(f"Image Pair: {pair}")
+        #   print(f"   Rotation error:            {metrics['rotation_error_deg']:.3f} deg")
+        #   print(f"   Translation direction err: {metrics['translation_dir_error_deg']:.3f} deg\n")
+    for metrics in error_dict.values():
+        rot_errors.append(metrics["rotation_error_deg"])
+        dir_errors.append(metrics["translation_dir_error_deg"])
+    print(f"Average rotation error: {np.mean(rot_errors):.3f} deg")
+    print(f"Average translation direction error: {np.mean(dir_errors):.3f} deg")

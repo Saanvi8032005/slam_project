@@ -19,33 +19,10 @@ mask : (N, 1) or (N,), optional
 import numpy as np
 import cv2 as cv
 from pathlib import Path
+from tests.reprojection_err import reprojection_error
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 testing_dir = PROJECT_ROOT / "outputs" / "triangulation"
-
-
-def reprojection_error(pts3D, pts_img, R, t, K):
-    """
-    pts3D: (N,3) triangulated points (in cam1 frame or world frame
-    consistent with R,t)
-    pts_img: (N,2) original 2D points in that camera
-    R, t, K: pose + intrinsics for that camera
-    """
-    pts3D = np.asarray(pts3D, dtype=np.float64)
-    pts_img = np.asarray(pts_img, dtype=np.float64)
-
-    if pts3D.shape[0] == 0:
-        return np.array([])
-
-    P = K @ np.hstack((R, t))      # 3x4
-    X_h = np.hstack([pts3D, np.ones((pts3D.shape[0], 1))]).T  # 4xN
-
-    proj = P @ X_h                 # 3xN
-    proj = proj[:2] / proj[2:]     # 2xN
-    proj = proj.T                  # Nx2
-
-    err = np.linalg.norm(proj - pts_img, axis=1)  # per-point pixel error
-    return err
 
 
 def triangulate_from_data(
@@ -85,10 +62,8 @@ def triangulate_from_data(
     N0 = pts1.shape[0]
     keep_idx = np.arange(N0)
 
-    # --- Basic sanity ---
     if pts1.shape != pts2.shape or pts1.shape[1] != 2:
-        raise ValueError(f"[TRI] Expected pts1, pts2 of shape (N, 2), got {
-            pts1.shape}, {pts2.shape}")
+        raise ValueError(f"[TRI] Expected pts1, pts2 of shape (N, 2), got {pts1.shape}, {pts2.shape}")
 
     print(f"[TRI] Initial correspondences: {pts1.shape[0]}")
 
@@ -101,7 +76,7 @@ def triangulate_from_data(
 
         if num_inliers < MIN_INLIERS:
             print("[TRI] Too few inliers; skipping this pair entirely")
-            return np.empty((0, 3), dtype=np.float32), 1
+            return np.empty((0, 3), dtype=np.float32), float("inf"), np.empty((0,), dtype=int)
 
         pts1 = pts1[m]
         pts2 = pts2[m]
@@ -109,7 +84,7 @@ def triangulate_from_data(
 
     if pts1.shape[0] < 2:
         print("[TRI] Not enough points to triangulate, returning empty array")
-        return np.empty((0, 3), dtype=np.float32), 1
+        return np.empty((0, 3), dtype=np.float32), float("inf"), np.empty((0,), dtype=int)
 
     print(f"[TRI] Loaded {pts1.shape[0]} matches for triangulation")
 
@@ -128,7 +103,7 @@ def triangulate_from_data(
     mask_w = np.abs(w) > 1e-6
     if not np.any(mask_w):
         print("[TRI] All points had near-zero w; returning empty point cloud")
-        return np.empty((0, 3), dtype=np.float32), 1
+        return np.empty((0, 3), dtype=np.float32), float("inf"), np.empty((0,), dtype=int)
 
     pts4D = pts4D[:, mask_w]
     pts1 = pts1[mask_w]
@@ -153,7 +128,7 @@ def triangulate_from_data(
 
     if pts3D.shape[0] == 0:
         print("[TRI] WARNING: no points left after z filtering")
-        return pts3D, 1
+        return np.empty((0, 3), dtype=np.float32), float("inf"), np.empty((0,), dtype=int)
 
     # Mild outlier clipping by distance from origin
     d = np.linalg.norm(pts3D, axis=1)
@@ -182,16 +157,28 @@ def triangulate_from_data(
         # --- 5) Reprojection error on both cameras ---
     err1 = reprojection_error(pts3D, pts1, np.eye(3), np.zeros((3, 1)), K)
     err2 = reprojection_error(pts3D, pts2, R, t, K)
+
+    MAX_REPROJ_ERR = 1.0  # pixels
+    mask_reproj = (err1 < MAX_REPROJ_ERR) & (err2 < MAX_REPROJ_ERR)
+    pts3D = pts3D[mask_reproj]
+    keep_idx = keep_idx[mask_reproj]
+    pts1 = pts1[mask_reproj]
+    pts2 = pts2[mask_reproj]
+    err1 = err1[mask_reproj]
+    err2 = err2[mask_reproj]
+
+    if pts3D.shape[0] == 0:
+        print("[TRI] WARNING: no points left after reprojection filtering")
+        return np.empty((0, 3), dtype=np.float32), float("inf"), np.empty((0,), dtype=int)
+
     mean1 = err1.mean() if err1.size > 0 else 0.0
     mean2 = err2.mean() if err2.size > 0 else 0.0
     if err1.size > 0:
-        print(f"[TRI] Reproj err cam1: mean={err1.mean():.2f}px, median={
-            np.median(err1):.2f}px")
+        print(f"[TRI] Reproj err cam1: mean={err1.mean():.2f}px, median={np.median(err1):.2f}px")
     if err2.size > 0:
-        print(f"[TRI] Reproj err cam2: mean={err2.mean():.2f}px, median={
-            np.median(err2):.2f}px")
+        print(f"[TRI] Reproj err cam2: mean={err2.mean():.2f}px, median={np.median(err2):.2f}px")
     if err1.size != 0 or err2.size != 0:
         err_mean = max(mean1, mean2)
     else:
-        err_mean = 0
+        err_mean = float('inf')
     return pts3D, err_mean, keep_idx

@@ -165,9 +165,9 @@ def matching(matcher="flann",
 
     kp1, des1, kp2, des2 = compute_orb_features(im1, im2)
 
-    knn = match_descriptors(des1, des2, method=matcher)
+    knn_m = match_descriptors(des1, des2, method=matcher)
     # is this needed? do i need if good is empty too
-    if len(knn) == 0:
+    if len(knn_m) == 0:
         print("[MATCH] No matches found")
         return (
             np.empty((0, 2), np.float32),
@@ -179,7 +179,12 @@ def matching(matcher="flann",
 
     # Ratio test
     ratio = 0.8   # was 0.75
-    good = [m for m, n in knn if m.distance < ratio * n.distance]
+    good = []
+    for knn in knn_m:
+        if len(knn) >= 2:  # Ensure there are at least 2 matches
+            m, n = knn
+            if m.distance < ratio * n.distance:
+                good.append(m)
     print(f"[RATIO] {len(good)} matches")
 
     # Apply chosen filter

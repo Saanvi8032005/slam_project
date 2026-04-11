@@ -17,8 +17,10 @@ def hat(w: np.ndarray) -> np.ndarray:
                      [wz, 0, -wx],
                      [-wy, wx, 0]], dtype=np.float64)
 
+
 def vee(W: np.ndarray) -> np.ndarray:
     return np.array([W[2,1], W[0,2], W[1,0]], dtype=np.float64)
+
 
 def so3_exp(w: np.ndarray) -> np.ndarray:
     theta = np.linalg.norm(w)
@@ -26,6 +28,7 @@ def so3_exp(w: np.ndarray) -> np.ndarray:
         return np.eye(3)
     W = hat(w / theta)
     return np.eye(3) + np.sin(theta) * W + (1 - np.cos(theta)) * (W @ W)
+
 
 def so3_log(R: np.ndarray) -> np.ndarray:
     # clamp trace for numerical stability
@@ -37,6 +40,7 @@ def so3_log(R: np.ndarray) -> np.ndarray:
         return np.zeros(3)
     w_hat = (R - R.T) / (2*np.sin(theta))
     return theta * vee(w_hat)
+
 
 def se3_exp(xi: np.ndarray) -> np.ndarray:
     # xi = [w(3), v(3)]
@@ -62,6 +66,7 @@ def se3_exp(xi: np.ndarray) -> np.ndarray:
     T[:3, 3] = t
     return T
 
+
 def se3_log(T: np.ndarray) -> np.ndarray:
     R = T[:3,:3]
     t = T[:3, 3]
@@ -82,6 +87,7 @@ def se3_log(T: np.ndarray) -> np.ndarray:
 
     v = V_inv @ t
     return np.hstack([w, v])
+
 
 def inv_T(T: np.ndarray) -> np.ndarray:
     R = T[:3,:3]

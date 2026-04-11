@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import numpy as np
 
 # Add the src directory to the Python path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -8,7 +9,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.append(str(SRC_DIR))
 
 from keyframe_selection.keyframe_selec import Map, Keyframe, print_map
-import numpy as np
+
 
 def test_add_keyframe():
     slam_map = Map()
@@ -40,6 +41,7 @@ def test_add_keyframe():
         assert False, "Expected ValueError when adding duplicate keyframe"
 
     print("All tests passed!")
+
 
 if __name__ == "__main__":
     test_add_keyframe()

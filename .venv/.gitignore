@@ -1,0 +1,7 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+
+# Python venv
+.venv/
+
+# Ignore only aligning_pc folder
+outputs/aligning_pc/

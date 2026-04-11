@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from tracking.tracking import matching
+from tests.reprojection_err import reprojection_error
 #   from tracking.lsd_tracking import lsd
 from pose_estimation.pose_estimation import pose_estimate
 from triangulation.triangulation import triangulate_from_data
@@ -38,10 +39,14 @@ from keyframe_selection.keyframe_helpers import (
 from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
 from utils.trajectory_utils import save_estimated_trajectory
 
-DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
-TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
-RBG_DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
-RGB_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb.txt"
+DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "rgb"
+#   DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_debugging_xyz"
+#   TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
+RBG_DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room"
+RGB_TXT = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "rgb.txt"
+
+estimated_trajectory_file = PROJECT_ROOT / "report_results" / "pipeline1" / "room" / "tests.txt"
+out_path = PROJECT_ROOT / "report_results" / "pipeline1" / "room" / "final_cloud.xyz"
 
 
 def load_image_files():
@@ -70,31 +75,6 @@ def load_rgb_entries(rgb_txt_path, dataset_root):
 
     print(f"[PIPE] Found {len(image_files)} images from rgb.txt")
     return timestamps, image_files
-
-
-def load_rgb_and_depth_entries(rgb_txt_path, depth_txt_path, dataset_root):
-    timestamps_rgb, image_files = [], []
-    timestamps_depth, depth_files = [], []
-
-    # Load RGB entries
-    with open(rgb_txt_path, "r") as f:
-        for line in f:
-            if line.startswith("#") or len(line.strip()) == 0:
-                continue
-            ts, rel_path = line.split()
-            timestamps_rgb.append(float(ts))
-            image_files.append(dataset_root / rel_path)
-
-    # Load Depth entries
-    with open(depth_txt_path, "r") as f:
-        for line in f:
-            if line.startswith("#") or len(line.strip()) == 0:
-                continue
-            ts, rel_path = line.split()
-            timestamps_depth.append(float(ts))
-            depth_files.append(dataset_root / rel_path)
-
-    return timestamps_rgb, image_files, timestamps_depth, depth_files
 
 
 def stage_tracking(img1, img2, pair_id, tracking_results):
@@ -149,7 +129,8 @@ def stage_pose(
         img1=None,
         img2=None,
         ts1=None,
-        ts2=None
+        ts2=None,
+        missing_pair=0,
     ):
     pair_id = tracking_entry["pair_id"]
     pts1 = tracking_entry["pts1"]
@@ -161,7 +142,7 @@ def stage_pose(
     # Handle skipped pairs
     if result[0] is None:
         print(f"[PIPE] Skipping pair {pair_id} due to low parallax or pose estimation failure")
-        return None, None, None, 0, 0.0, None, None, None, None
+        return None, None, None, 0, 0.0, None, None, None, None, missing_pair
 
     R, t, K, num_inliers, ratio, pts1, pts2, _, _ = result
     t_norm = np.linalg.norm(t)
@@ -187,16 +168,25 @@ def stage_pose(
                             image_files,
                             max_diff=0.02
                         )
-        R_gt, t_gt = relative_pose_from_rgb_ts(rgb_to_gt_pose, ts1, ts2)
+        R_gt, t_gt = None, None
+        try:
+            R_gt, t_gt = relative_pose_from_rgb_ts(rgb_to_gt_pose, ts1, ts2)
+        except KeyError as e:
+            print(f"[WARNING] {e}")
+            missing_pair += 1
 
-        # Errors
-        rot_err = rotation_error_deg(R, R_gt)
-        dir_err = translation_direction_error_deg(t, t_gt)
-        print(f"[POSE][GT] Rotation error:            {rot_err:.3f} deg")
-        print(f"[POSE][GT] Translation direction err: {dir_err:.3f} deg")
+        if R_gt is not None and t_gt is not None:
+            rot_err = rotation_error_deg(R, R_gt)
+            dir_err = translation_direction_error_deg(t, t_gt)
+            print(f"[POSE][GT] Rotation error:            {rot_err:.3f} deg")
+            print(f"[POSE][GT] Translation direction err: {dir_err:.3f} deg")
+        else:
+            rot_err = None
+            dir_err = None
+            print(f"[POSE][GT] Ground truth pose not found for pair {pair_id}")
 
     # should just return pose_store tbh
-    return R, t, K, num_inliers, ratio, rot_err, dir_err, pts1, pts2
+    return R, t, K, num_inliers, ratio, rot_err, dir_err, pts1, pts2, missing_pair
 
 
 def stage_triangulate(tracking_entry, pose_entry, points_store=None):
@@ -277,7 +267,6 @@ def save_global_points(global_points):
         # np.savetxt("global_points.xyz", pts)
 
         # Option 2 (nicer): save into outputs/aligning_pc
-        out_path = PROJECT_ROOT / "outputs" / "aligning_pc" / "final_cloud.xyz"
         np.savetxt(out_path, pts)
 
 
@@ -319,39 +308,9 @@ def histogram(rot_err_arr):
     print(f"Number of catastrophic failures (≥10°): {num_big}")
 
 
-def generate_3d_points_from_depth(depth_image, K):
-    """
-    Generate 3D points from a depth image.
-
-    Args:
-        depth_image (np.ndarray): Depth image.
-        K (np.ndarray): Camera intrinsic matrix.
-
-    Returns:
-        np.ndarray: 3D points (N x 3).
-    """
-    h, w = depth_image.shape
-    fx, fy = K[0, 0], K[1, 1]
-    cx, cy = K[0, 2], K[1, 2]
-
-    # Generate pixel grid
-    x, y = np.meshgrid(np.arange(w), np.arange(h))
-    x = x.astype(np.float32)
-    y = y.astype(np.float32)
-
-    # Back-project to 3D
-    z = depth_image / 1000.0  # Convert depth to meters if needed
-    x = (x - cx) * z / fx
-    y = (y - cy) * z / fy
-
-    points_3d = np.stack((x, y, z), axis=-1).reshape(-1, 3)
-    return points_3d
-
-
 if __name__ == "__main__":
 
-    #   timestamps, image_files = load_rgb_entries(RGB_TXT, RBG_DATA_DIR)
-    timestamps, image_files, timestamps_depth, depth_files = load_rgb_and_depth_entries(RGB_TXT, RBG_DATA_DIR / "depth.txt", RBG_DATA_DIR)
+    timestamps, image_files = load_rgb_entries(RGB_TXT, RBG_DATA_DIR)
     tracking_results = {}
     pose_results = {}
     points_results = {}
@@ -361,6 +320,8 @@ if __name__ == "__main__":
     trans_dir_errors = []       # for report
     tri_counts = []             # for report
     tri_errors = []             # for report
+    match_counts = []           # for report
+    missing_pair = 0
 
     slam_map = Map()
     is_initialized = False
@@ -368,28 +329,28 @@ if __name__ == "__main__":
     init_kf1_id = None
     last_kf_id = None
 
-    for i in range(10 - 1):    # len(image_files) - 1
+    for i in range(len(image_files) - 1):    # len(image_files) - 1
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
         print(f"[PIPE] Image 1: {image_files[i]}")
         print(f"[PIPE] Image 2: {image_files[i + 1]}")
-        print(f"[PIPE] Depth Image 1: {depth_files[i]}")
-        print(f"[PIPE] Depth Image 2: {depth_files[i + 1]}")
-
 
         pair_id = f"{i:03d}"
         img1 = image_files[i]
         img2 = image_files[i + 1]
 
         tracking_entry = stage_tracking(img1, img2, pair_id, tracking_results)
-        R, t, K, num_inliers, inlier_ratio, rot_err, dir_err, _, _ = stage_pose(
+        R, t, K, num_inliers, inlier_ratio, rot_err, dir_err, _, _ , missing_pair= stage_pose(
             tracking_entry,
             pose_results,
             img1,
             img2,
             ts1=timestamps[i],
             ts2=timestamps[i + 1],
+            missing_pair=missing_pair,
         )
+        matches_len = len(tracking_entry["matches"])
+        match_counts.append(matches_len)
 
         if R is None:  # Skip pairs with low parallax
             continue
@@ -467,7 +428,6 @@ if __name__ == "__main__":
     print("\n[PIPE] Done processing all image pairs.")
 
     # Save the estimated trajectory
-    estimated_trajectory_file = PROJECT_ROOT / "outputs" / "tests" / "tests.txt"
     save_estimated_trajectory(slam_map, image_files, estimated_trajectory_file)
 
     print("\n================ GLOBAL POSE STATS ================\n")
@@ -486,3 +446,28 @@ if __name__ == "__main__":
     for kf_id in sorted(slam_map.keyframes.keys()):
         print(slam_map.keyframes[kf_id].frame_id, end=" ")
     print()
+
+    results = {
+        "matcher": "MATCHER",
+        "filter": "FILTER",
+
+        "mean_inlier_ratio": np.mean(ransac_ratios),
+        "median_inlier_ratio": np.median(ransac_ratios),
+
+        "mean_rot_error": np.mean(rot_errors),
+        "median_rot_error": np.median(rot_errors),
+
+        "mean_trans_error": np.mean(trans_dir_errors),
+        "median_trans_error": np.median(trans_dir_errors),
+
+        "mean_reproj_error": np.mean(tri_errors),
+        "median_reproj_error": np.median(tri_errors),
+
+        "mean_3d_points": np.mean(tri_counts),
+        "median_3d_points": np.median(tri_counts),
+
+        "accepted_keyframes": tracking_acceptance,
+        "mean_matches": np.mean(match_counts),
+    }
+    print(results)
+    print(f"No. of missing pairs (used for GT error analysis): {missing_pair}")

@@ -14,7 +14,6 @@ class MapPoint:
     descriptor: np.ndarray             # ORB descriptor (32,)
     observations: Dict[int, int]  # keyframe_id -> keypoint_index
 
-
 @dataclass
 class Keyframe:
     """

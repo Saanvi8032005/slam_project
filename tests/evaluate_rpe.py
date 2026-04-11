@@ -391,44 +391,16 @@ if __name__ == '__main__':
         plt.savefig(args.plot,dpi=300)
         
 
-
-
 """
 run with:
 python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_rpe.py \
 /Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
-/Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/tests.txt \
+/Users/saanvibajaj/Y3_SLAM_Project/report_results/pipeline2/desk1/tests.txt \
 --offset 0.0 \
+--scale 0.5 \
 --fixed_delta \
---plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/chain_trajectory_plot_rpe.png \
---save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rpe_results.txt \
---verbose
-"""
-
-
-"""
-run with:
-python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_rpe.py \
-/Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
-/Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/pnp_tests.txt \
---offset 0.0 \
---scale 0.075 \
---fixed_delta \
---plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/trajectory_plot_rpe.png \
---save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rpe_results.txt \
---verbose
-"""
-
-
-"""
-run with:
-python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_rpe.py \
-/Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
-/Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rgbd_vo_traj.txt \
---offset 0.0 \
---fixed_delta \
---plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/depth_trajectory_plot_rpe.png \
---save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rpe_results.txt \
+--plot /Users/saanvibajaj/Y3_SLAM_Project/report_results/pipeline2/desk1/depth_rpe.png \
+--save /Users/saanvibajaj/Y3_SLAM_Project/report_results/pipeline2/desk1/rpe_results.txt \
 --verbose
 """
 
@@ -436,10 +408,11 @@ python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_rpe.py \
 run with:
 python /Users/saanvibajaj/Y3_SLAM_Project/tests/evaluate_rpe.py \
 /Users/saanvibajaj/Y3_SLAM_Project/data/rgb_dataset/groundtruth.txt \
-/Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rgbd_slam_traj.txt \
+/Users/saanvibajaj/Y3_SLAM_Project/report_results/pipeline2/desk1/tests.txt \
 --offset 0.0 \
+--scale 0.1 \
 --fixed_delta \
---plot /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/SLAM_depth_trajectory_plot_rpe.png \
---save /Users/saanvibajaj/Y3_SLAM_Project/outputs/tests/rpe_results.txt \
+--plot /Users/saanvibajaj/Y3_SLAM_Project/report_results/pipeline2/desk1/depth_rpe.png \
+--save /Users/saanvibajaj/Y3_SLAM_Project/report_results/pipeline2/desk1/rpe_results.txt \
 --verbose
 """

@@ -1,0 +1,10 @@
+.venv/
+#   outputs/aligning_pc/
+#   outputs/debugging_midas/MIDAS_SLAM_cloud_colour.xyz
+#   outputs/debugging_pnp/pnp_cloud.xyz
+#   outputs/debugging_midas_workingdepth/midas_vo_cloud.xyz
+outputs/
+data/
+report_results/
+open3d_env/
+gifs/frames/
