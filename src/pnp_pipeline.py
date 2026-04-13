@@ -27,9 +27,9 @@ from tests.pose_estimation_eval import (
         translation_direction_error_deg,
         GT_PATH,
     )
-from keyframe_selection.keyframe_selec import Map, Edge
+from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
 from keyframe_selection.keyframe_helpers import (
-    initialize_map,
+    initialize_map,  # Fixed function name
     create_mappoints_from_triangulation,
     insert_keyframe_if_needed,
     kps_to_xy,
@@ -37,10 +37,11 @@ from keyframe_selection.keyframe_helpers import (
 from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
 from utils.trajectory_utils import save_estimated_trajectory
 from pose_estimation.PnP import run_pnp_for_frame
+from tests.reprojection_err import reprojection_error
 
-DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
-estimated_trajectory_file = PROJECT_ROOT / "report_results" / "pipeline2" / "desk1" / "tests.txt"
-cloud_file = PROJECT_ROOT / "report_results" / "pipeline2" / "desk1" / "final_cloud.xyz"
+DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_large" / "rgb"
+estimated_trajectory_file = PROJECT_ROOT / "report_results" / "pipeline2" / "hard" / "tests.txt"
+cloud_file = PROJECT_ROOT / "report_results" / "pipeline2" / "hard" / "final_cloud.xyz"
 
 
 def load_image_files():
@@ -573,37 +574,6 @@ def save_slam_map_points_with_colour(slam_map, output_file):
     print(f"[PIPE] Saved SLAM map points with color to {output_file}")
 
 
-def safe_translation_direction_error_deg(t_est, t_gt, min_norm=1e-3):
-    """
-    Return None if either translation is too small for a meaningful direction comparison.
-    """
-    n_est = float(np.linalg.norm(t_est))
-    n_gt = float(np.linalg.norm(t_gt))
-    if n_est < min_norm or n_gt < min_norm:
-        return None
-    return translation_direction_error_deg(t_est, t_gt)
-
-
-def is_good_pnp_for_mapping(
-    ninliers: int,
-    reproj_mean: float,
-    t_rel_norm: float,
-    rot_err_deg: float | None = None,
-    dir_err_deg: float | None = None,
-):
-    """
-    Strict gate for whether a PnP pose is trusted enough to CREATE NEW MAP POINTS.
-    Tracking can still continue even if this returns False.
-    """
-    if ninliers < 120:
-        return False
-    if reproj_mean is None or reproj_mean > 1.0:
-        return False
-    if t_rel_norm < 1e-3:
-        return False
-    return True
-
-
 if __name__ == "__main__":
 
     image_files = load_image_files()
@@ -673,7 +643,7 @@ if __name__ == "__main__":
                 trans_dir_errors_tri.append(dir_err_tri)
             if "err_mean" in points_entry and points_entry["err_mean"] is not None:
                 reproj_errors_tri.append(points_entry["err_mean"])
-        
+                
             if is_good_keyframe(
                 pose_entry['num_inliers'],
                 pose_entry['inlier_ratio'],
@@ -789,6 +759,7 @@ if __name__ == "__main__":
             rot_errors_pnp.append(rot_err_pnp)
             trans_dir_errors_pnp.append(dir_err_pnp)
 
+            """
             print("last_kf_id:", last_kf_id, "kf_j_id:", kf_j_id)
             print("last frame:", slam_map.keyframes[last_kf_id].frame_id)
             print("cur frame:", slam_map.keyframes[kf_j_id].frame_id)
@@ -802,10 +773,12 @@ if __name__ == "__main__":
             print("dir err:", translation_direction_error_deg(t_rel, t_gt))
             print("dir err flipped:", translation_direction_error_deg(t_rel, -t_gt))
 
+            #   debugging
             print(f"[PIPE] KF{last_kf_id} -> KF{kf_j_id}")
             print("det(R_rel):", np.linalg.det(R_rel))
             print("t_rel:", t_rel)
             print("t_rel norm:", np.linalg.norm(t_rel))
+            """
 
             created = triangulate_new_features_between_keyframes(
                 slam_map=slam_map,
@@ -820,6 +793,10 @@ if __name__ == "__main__":
             if kf_j_id % 5 == 0:
                 cull_weak_mappoints(slam_map, min_observations=2)
             last_kf_id = kf_j_id
+
+    # changed nothing 
+    optimise_pose_graph(slam_map, max_nfev=50, robust=True, verbose=2) 
+    print_map(slam_map)
 
     if True:
         # Save the estimated trajectory

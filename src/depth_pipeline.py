@@ -55,18 +55,18 @@ from depth.MiDaS_monocular import (
 from pose_estimation.PnP import run_pnp_for_frame
 from tests.reprojection_err import reprojection_error
 
-DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "rgb"
+DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 #   TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
-RGB_DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room"
-RGB_TXT = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "rgb.txt"
-DEPTH_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "depth"
-DEPTH_TXT = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "depth.txt"
+RGB_DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
+RGB_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb.txt"
+DEPTH_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "depth"
+DEPTH_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "depth.txt"
 
-out_pc = PROJECT_ROOT / "report_results" / "pipeline4" / "room" / "final_cloud.xyz"
-out_file = PROJECT_ROOT / "report_results" / "pipeline4" / "room" / "tests.txt"
-out_pics = PROJECT_ROOT / "report_results" / "pipeline4" / "room" / "pics"
+out_pc = PROJECT_ROOT / "report_results" / "pipeline4" / "desk1" / "final_cloud.xyz"
+out_file = PROJECT_ROOT / "report_results" / "pipeline4" / "desk1" / "tests.txt"
+out_pics = PROJECT_ROOT / "report_results" / "pipeline4" / "desk1" / "pics"
 
-f2 = False
+f2 = True
 if f2:
     K_RGBD = np.array([
         [520.9,   0.0, 325.1],
@@ -772,7 +772,7 @@ if __name__ == "__main__":
 
     plt.figure(figsize=(7,5))
     #   cumulative_plot(trans_err_map, "PnP Map")
-    histogram(rot_err_map, bins=20, title="Map-Based Histogram of PnP Relative Rotation Errors Room")
-    histogram(reproj_err_map, bins=20, title="Map-Based Histogram of PnP Reprojection Errors (px) Room")
-    histogram(trans_err_map, bins=20, title="Map-Based Histogram of PnP Relative Translation Errors (m) Room")
+    histogram(rot_err_map, bins=20, title="Map-Based Histogram of PnP Relative Rotation Errors")
+    histogram(reproj_err_map, bins=20, title="Map-Based Histogram of PnP Reprojection Errors (px)")
+    histogram(trans_err_map, bins=20, title="Map-Based Histogram of PnP Relative Translation Errors (m)")
 

@@ -12,11 +12,12 @@ pcd = o3d.geometry.PointCloud()
 pcd.points = o3d.utility.Vector3dVector(xyz)
 pcd.colors = o3d.utility.Vector3dVector(rgb)
 
-center = xyz.mean(axis=0)
+#center = xyz.mean(axis=0)
+center = pcd.get_center()
 
 # --- 1) set a good initial "top-looking" pose by rotating the cloud itself ---
 # tilt slightly downward so you keep seeing the desk top, not underneath
-Rx = pcd.get_rotation_matrix_from_xyz((np.deg2rad(-25), 0, 0))
+Rx = pcd.get_rotation_matrix_from_xyz((np.deg2rad(-50), 0, 0))
 pcd.rotate(Rx, center=center)
 # flip upside down view
 Rz = pcd.get_rotation_matrix_from_xyz((0, 0, np.pi))
@@ -31,15 +32,15 @@ vis.create_window(visible=False, width=1280, height=720)
 vis.add_geometry(pcd)
 
 render_option = vis.get_render_option()
-render_option.point_size = 1.0
-render_option.background_color = np.array([0, 0, 0])
+render_option.point_size = 1.5
+render_option.background_color = np.array([0.3, 0.3, 0.3])
 render_option.light_on = False
 
 ctr = vis.get_view_control()
 ctr.set_lookat(center)
-ctr.set_front([0, 0, -1])
+ctr.set_front([0.3, 0.5, 1])
 ctr.set_up([0, 1, 0])
-ctr.set_zoom(0.45)
+ctr.set_zoom(0.3)
 
 save_dir = "/Users/saanvibajaj/Y3_SLAM_Project/gifs/frames"
 os.makedirs(save_dir, exist_ok=True)

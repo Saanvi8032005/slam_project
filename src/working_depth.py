@@ -51,16 +51,16 @@ from depth.MiDaS_monocular import (
 )
 from tests.reprojection_err import reprojection_error
 
-DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "rgb"
+DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_large" / "rgb"
 #   TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
-RGB_DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room"
-RGB_TXT = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "rgb.txt"
-DEPTH_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "depth"
-DEPTH_TXT = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "depth.txt"
+RGB_DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_large"
+RGB_TXT = PROJECT_ROOT / "data" / "rgbd_dataset_large" / "rgb.txt"
+DEPTH_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_large" / "depth"
+DEPTH_TXT = PROJECT_ROOT / "data" / "rgbd_dataset_large" / "depth.txt"
 
-out_pc = PROJECT_ROOT / "report_results" / "pipeline3" / "room" / "final_cloud.xyz"
-out_file = PROJECT_ROOT / "report_results" / "pipeline3" / "room" / "tests.txt"
-out_pics = PROJECT_ROOT / "report_results" / "pipeline3" / "room" / "pics"
+out_pc = PROJECT_ROOT / "report_results" / "pipeline3" / "hard_min" / "final_cloud.xyz"
+out_file = PROJECT_ROOT / "report_results" / "pipeline3" / "hard_min" / "tests.txt"
+out_pics = PROJECT_ROOT / "report_results" / "pipeline3" / "hard_min" / "pics"
 
 """
 FX = 525.0
@@ -73,12 +73,19 @@ K_RGBD = np.array([
     [0,  0,  1]
 ], dtype=np.float64)
 """
-
-K_RGBD = np.array([
-    [517.3,   0.0, 318.6],
-    [0.0, 516.5, 255.3],
-    [0.0,   0.0,   1.0]
-], dtype=np.float32)
+f2 = True
+if f2:
+    K_RGBD = np.array([
+        [520.9,   0.0, 325.1],
+        [0.0, 521.0, 249.7],
+        [0.0,   0.0,   1.0]
+    ], dtype=np.float32)
+else:
+    K_RGBD = np.array([
+        [517.3,   0.0, 318.6],
+        [0.0, 516.5, 255.3],
+        [0.0,   0.0,   1.0]
+    ], dtype=np.float32)
 
 
 def load_rgb_entries(rgb_txt_path, dataset_root):
@@ -526,7 +533,7 @@ def cumulative_plot(errors, label):
     errors = np.sort(errors)
     y = np.arange(1, len(errors) + 1) / len(errors)
     plt.plot(errors, y, label=label)
-
+    
     plt.xlabel("Relative Rotation Error (deg)")
     plt.ylabel("Fraction of Frames")
     plt.title("Working Depth: Cumulative Rotation Error")
@@ -575,7 +582,7 @@ if __name__ == "__main__":
     stats = True
     missing_error = 0
 
-    for i in range(len(frames) - 1):
+    for i in range(0, 500, 1):
         print("\n" + "="*200)
         print(f"\n[PIPE] Processing image pair {i} and {i + 1}...")
 
@@ -724,7 +731,7 @@ if __name__ == "__main__":
 
     if stats: 
         plt.figure(figsize=(7,5))
-        histogram(rot_errors, bins=20, title="Histogram of Relative Rotation Errors (RGB-D) Room")
-        histogram(trans_errors_m, bins=20, title="Histogram of Relative Translation Errors (RGB-D) Room")
-        histogram(reproj_errors, bins=20, title="Histogram of Reprojection Errors (RGB-D) Room")
+        histogram(rot_errors, bins=20, title="Histogram of Relative Rotation Errors (RGB-D MiDaS) D2")
+        histogram(trans_errors_m, bins=20, title="Histogram of Relative Translation Errors (RGB-D MiDaS) D2")
+        histogram(reproj_errors, bins=20, title="Histogram of Reprojection Errors (RGB-D MiDaS) D2")
     print(f"missing stats", missing_error)
