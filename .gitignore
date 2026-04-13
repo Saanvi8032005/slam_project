@@ -5,6 +5,10 @@
 #   outputs/debugging_midas_workingdepth/midas_vo_cloud.xyz
 outputs/
 data/
-report_results/
+
+report_results/*
+!report_results/pipeline1/debugging/
+
 open3d_env/
 gifs/frames/
+1.blend1
