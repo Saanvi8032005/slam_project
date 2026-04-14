@@ -3,46 +3,31 @@ import cv2 as cv
 from keyframe_selection.keyframe_selec import Map, Keyframe
 
 
-def backproject_keypoint(kp, depth_img, fx, fy, cx, cy):
-    u, v = kp.pt
-    u = int(round(u))
-    v = int(round(v))
-
-    if u < 0 or v < 0 or u >= depth_img.shape[1] or v >= depth_img.shape[0]:
-        return None
-
-    z = depth_img[v, u]
-    if not np.isfinite(z) or z <= 0:
-        return None
-
-    x = (u - cx) * z / fx
-    y = (v - cy) * z / fy
-    return np.array([x, y, z], dtype=np.float32)
-
-
 def depth_to_meters(depth_raw, scale=5000.0):
     depth_m = depth_raw.astype(np.float32) / scale
     depth_m[depth_raw == 0] = np.nan
     return depth_m
 
 
-def backproject_keypoints(kpts, descs, depth_img, fx, fy, cx, cy):
-    pts3d = []
-    valid_kpts = []
-    valid_descs = []
+def backproject_keypoint(kp_or_uv, depth_img, fx, fy, cx, cy):
+    if hasattr(kp_or_uv, "pt"):
+        u, v = kp_or_uv.pt
+    else:
+        u, v = kp_or_uv
 
-    for kp, desc in zip(kpts, descs):
-        p3d = backproject_keypoint(kp, depth_img, fx, fy, cx, cy)
-        if p3d is None:
-            continue
-        pts3d.append(p3d)
-        valid_kpts.append(kp)
-        valid_descs.append(desc)
+    ui = int(round(u))
+    vi = int(round(v))
 
-    if len(pts3d) == 0:
-        return [], None, np.empty((0, 3), dtype=np.float32)
+    if ui < 0 or vi < 0 or ui >= depth_img.shape[1] or vi >= depth_img.shape[0]:
+        return None
 
-    return valid_kpts, np.array(valid_descs), np.array(pts3d, dtype=np.float32)
+    z = depth_img[vi, ui]
+    if not np.isfinite(z) or z <= 0:
+        return None
+
+    x = (u - cx) * z / fx
+    y = (v - cy) * z / fy
+    return np.array([x, y, z], dtype=np.float32)
 
 
 def stage_pose_rgbd(tracking_entry, depth1_m, K):
@@ -129,68 +114,6 @@ def stage_pose_rgbd(tracking_entry, depth1_m, K):
     }
 
 
-def generate_3d_points_from_depth(depth_image, K):
-    """
-    Generate 3D points from a depth image.
-
-    Args:
-        depth_image (np.ndarray): Depth image.
-        K (np.ndarray): Camera intrinsic matrix.
-
-    Returns:
-        np.ndarray: 3D points (N x 3).
-    """
-    h, w = depth_image.shape
-    fx, fy = K[0, 0], K[1, 1]
-    cx, cy = K[0, 2], K[1, 2]
-
-    # Generate pixel grid
-    x, y = np.meshgrid(np.arange(w), np.arange(h))
-    x = x.astype(np.float32)
-    y = y.astype(np.float32)
-
-    # Back-project to 3D
-    z = depth_image.astype(np.float32) / 5000.0  # Convert depth to meters if needed
-    x = (x - cx) * z / fx
-    y = (y - cy) * z / fy
-
-    points_3d = np.stack((x, y, z), axis=-1).reshape(-1, 3)
-    return points_3d
-
-
-def keypoints_with_depth(kp, desc, depth_m, fx, fy, cx, cy):
-    pts2d = []
-    pts3d = []
-    desc_valid = []
-
-    h, w = depth_m.shape
-
-    for k, d in zip(kp, desc):
-        u, v = k.pt
-        ui = int(round(u))
-        vi = int(round(v))
-
-        if ui < 0 or vi < 0 or ui >= w or vi >= h:
-            continue
-
-        z = depth_m[vi, ui]
-        if not np.isfinite(z) or z <= 0:
-            continue
-
-        x = (u - cx) * z / fx
-        y = (v - cy) * z / fy
-
-        pts2d.append([u, v])
-        pts3d.append([x, y, z])
-        desc_valid.append(d)
-
-    return (
-        np.array(pts2d, dtype=np.float32),
-        np.array(desc_valid, dtype=np.uint8) if len(desc_valid) > 0 else np.empty((0, 32), dtype=np.uint8),
-        np.array(pts3d, dtype=np.float32),
-    )
-
-
 def load_txt_entries(txt_path, dataset_root):
     entries = []
     with open(txt_path, "r") as f:
@@ -233,25 +156,6 @@ def cull_weak_mappoints(slam_map, min_observations=2):
     return len(to_remove)
 
 
-def create_new_mappoints_from_depth_for_keyframe(
-    slam_map,
-    kf_id,
-    depth_m,
-    max_depth=5.0,
-    max_new_points=80,
-):
-    kf = slam_map.keyframes[kf_id]
-    return create_mappoints_from_depth(
-        slam_map=slam_map,
-        kf_id=kf_id,
-        depth_m=depth_m,
-        keypoints_xy=kf.keypoints_xy,
-        descriptors=kf.descriptors,
-        max_depth=max_depth,
-        max_new_points=max_new_points,
-    )
-
-
 def detect_orb_features(img, nfeatures=4000):
     orb = cv.ORB_create(nfeatures)
     keypoints, descriptors = orb.detectAndCompute(img, None)
@@ -280,7 +184,7 @@ def initialize_map_rgbd(
       - depth-born map points from valid ORB keypoints
     """
 
-    keypoints, keypoints_xy, descriptors = detect_orb_features(img)
+    _, keypoints_xy, descriptors = detect_orb_features(img)
 
     if keypoints_xy.shape[0] == 0:
         raise ValueError("No ORB features found in initial frame")
@@ -304,22 +208,16 @@ def initialize_map_rgbd(
 
     created = 0
 
-    for kp_idx, (u_f, v_f) in enumerate(keypoints_xy):
-        u = int(round(u_f))
-        v = int(round(v_f))
-
-        if not (0 <= v < depth_m.shape[0] and 0 <= u < depth_m.shape[1]):
+    for kp_idx, uv in enumerate(keypoints_xy):
+        p3d = backproject_keypoint(uv, depth_m, fx, fy, cx, cy)
+        if p3d is None:
             continue
 
-        z = depth_m[v, u]
-        if not np.isfinite(z) or z <= 0 or z > max_depth:
+        if p3d[2] > max_depth:
             continue
-
-        x = (u_f - cx) * z / fx
-        y = (v_f - cy) * z / fy
 
         # since first pose is identity and world = camera0, this is already a world point
-        Pw = np.array([x, y, z], dtype=np.float64)
+        Pw = p3d.astype(np.float64)
 
         mp_id = slam_map.add_mappoint(
             xyz=Pw,
@@ -341,23 +239,11 @@ def matched_pixels_to_3d2d(pts1, pts2, depth1_m, fx, fy, cx, cy):
     img_pts = []
     valid_idx = []
 
-    h, w = depth1_m.shape
-
     for i, ((u1, v1), (u2, v2)) in enumerate(zip(pts1, pts2)):
-        u = int(round(u1))
-        v = int(round(v1))
-
-        if u < 0 or v < 0 or u >= w or v >= h:
+        pts3D = backproject_keypoint((u1, v1), depth1_m, fx, fy, cx, cy)
+        if pts3D is None:
             continue
-
-        z = depth1_m[v, u]
-        if not np.isfinite(z) or z <= 0:
-            continue
-
-        x = (u1 - cx) * z / fx
-        y = (v1 - cy) * z / fy
-
-        obj_pts.append([x, y, z])   # 3D in camera-1 frame
+        obj_pts.append(pts3D)   # 3D in camera-1 frame
         img_pts.append([u2, v2])    # 2D in frame 2
         valid_idx.append(i)
 
@@ -391,35 +277,23 @@ def create_mappoints_from_depth(
     kf = slam_map.keyframes[kf_id]
     T_cw = kf.T_cw
     T_wc = np.linalg.inv(T_cw)
-    K = kf.K
-
-    fx, fy = K[0, 0], K[1, 1]
-    cx, cy = K[0, 2], K[1, 2]
 
     created = 0
 
     for kp_idx, (u_f, v_f) in enumerate(keypoints_xy):
-        if created >= max_new_points:
+        if max_new_points is not None and created >= max_new_points:
             break
 
         # skip if already linked
         if kf.kp_to_mp[kp_idx] is not None:
             continue
 
-
-        u = int(round(u_f))
-        v = int(round(v_f))
-
-        if not (0 <= v < depth_m.shape[0] and 0 <= u < depth_m.shape[1]):
+        p3d_cam = backproject_keypoint((u_f, v_f), depth_m, kf.K[0, 0], kf.K[1, 1], kf.K[0, 2], kf.K[1, 2])
+        if p3d_cam is None:
             continue
-
-        z = depth_m[v, u]
-        if not np.isfinite(z) or z <= 0 or z > max_depth:
+        if p3d_cam[2] > max_depth:
             continue
-
-        x = (u_f - cx) * z / fx
-        y = (v_f - cy) * z / fy
-
+        x, y, z = p3d_cam.astype(np.float64)
         p_cam = np.array([x, y, z, 1.0], dtype=np.float64)
         p_world = (T_wc @ p_cam)[:3]
 
@@ -436,53 +310,46 @@ def create_mappoints_from_depth(
     return created
 
 
-def add_new_mappoints_from_depth_for_keyframe(
-    slam_map: Map,
-    kf_id: int,
-    depth_m: np.ndarray,
-    max_depth: float = 5.0,
+def create_new_mappoints_from_depth_for_keyframe(
+    slam_map,
+    kf_id,
+    depth_m,
+    max_depth=5.0,
+    max_new_points=80,
 ):
-    """
-    For a keyframe that already exists in the map:
-    create new MapPoints from keypoints that are not yet linked to any MapPoint.
-    """
     kf = slam_map.keyframes[kf_id]
     T_cw = kf.T_cw
     T_wc = np.linalg.inv(T_cw)
 
-    fx, fy = kf.K[0, 0], kf.K[1, 1]
-    cx, cy = kf.K[0, 2], kf.K[1, 2]
-
     created = 0
 
     for kp_idx, (u_f, v_f) in enumerate(kf.keypoints_xy):
+        if max_new_points is not None and created >= max_new_points:
+            break
+
+        # skip if already linked
         if kf.kp_to_mp[kp_idx] is not None:
             continue
 
-        u = int(round(u_f))
-        v = int(round(v_f))
-
-        if not (0 <= v < depth_m.shape[0] and 0 <= u < depth_m.shape[1]):
+        p3d_cam = backproject_keypoint((u_f, v_f), depth_m, kf.K[0, 0], kf.K[1, 1], kf.K[0, 2], kf.K[1, 2])
+        if p3d_cam is None:
             continue
-
-        z = depth_m[v, u]
-        if not np.isfinite(z) or z <= 0 or z > max_depth:
+        if p3d_cam[2] > max_depth:
             continue
-
-        x = (u_f - cx) * z / fx
-        y = (v_f - cy) * z / fy
-
+        x, y, z = p3d_cam.astype(np.float64)
         p_cam = np.array([x, y, z, 1.0], dtype=np.float64)
         p_world = (T_wc @ p_cam)[:3]
 
         mp_id = slam_map.add_mappoint(
             xyz=p_world,
             descriptor=kf.descriptors[kp_idx],
-            observations={kf_id: kp_idx},
+            observations={kf_id: int(kp_idx)},
         )
 
         kf.kp_to_mp[kp_idx] = mp_id
         created += 1
 
-    print(f"[MAP] Added {created} new depth MapPoints in KF{kf_id}")
+    print(f"[MAP] Created {created} depth-born MapPoints in KF{kf_id}")
     return created
+
+

@@ -179,5 +179,6 @@ def pose_estimate(pts1, pts2, idx_i=None, idx_j=None, log_err: bool | None = Non
 
     return R, t, K, num_inliers_pose, ratio_pose, pts1_final, pts2_final, idx_i_inl, idx_j_inl
 
+
 if __name__ == "__main__":
     print('Run from pipeline.py')

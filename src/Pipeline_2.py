@@ -39,9 +39,9 @@ from utils.trajectory_utils import save_estimated_trajectory
 from pose_estimation.PnP import run_pnp_for_frame
 from tests.reprojection_err import reprojection_error
 
-DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_large" / "rgb"
-estimated_trajectory_file = PROJECT_ROOT / "report_results" / "pipeline2" / "hard" / "tests.txt"
-cloud_file = PROJECT_ROOT / "report_results" / "pipeline2" / "hard" / "final_cloud.xyz"
+DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
+estimated_trajectory_file = PROJECT_ROOT / "report_results" / "pipeline2" / "desk1" / "tests.txt"
+cloud_file = PROJECT_ROOT / "report_results" / "pipeline2" / "desk1" / "final_cloud.xyz"
 
 
 def load_image_files():

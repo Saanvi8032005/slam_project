@@ -166,7 +166,6 @@ def matching(matcher="flann",
     kp1, des1, kp2, des2 = compute_orb_features(im1, im2)
 
     knn_m = match_descriptors(des1, des2, method=matcher)
-    # is this needed? do i need if good is empty too
     if len(knn_m) == 0:
         print("[MATCH] No matches found")
         return (
