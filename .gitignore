@@ -6,8 +6,9 @@
 outputs/
 data/
 
-report_results/*
-!report_results/pipeline1/debugging/ate_traj.png
+report_results/**/*.txt
+report_results/**/*.xyz
+
 
 open3d_env/
 
