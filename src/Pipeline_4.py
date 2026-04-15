@@ -19,26 +19,20 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from tracking.tracking import matching
-#   from tracking.lsd_tracking import lsd
-from pose_estimation.pose_estimation import pose_estimate
 from triangulation.triangulation import triangulate_from_data
 from visualising.visualising import visualize_points
 from aligning_pc.aligning_pc import align_point_clouds
 from tests.pose_estimation_eval import (
         build_rgb_to_gt_pose_map,
-        relative_pose_from_rgb_ts,
         rotation_error_deg,
         translation_direction_error_deg,
         GT_PATH,
     )
-from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
+from keyframe_selection.keyframe_selec import Map, Edge, print_map
 from keyframe_selection.keyframe_helpers import (
-    initialize_map,  # Fixed function name
-    create_mappoints_from_triangulation,
     insert_keyframe_if_needed,
     kps_to_xy,
 )
-from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
 from utils.trajectory_utils import save_estimated_trajectory
 from utils.util import (
     depth_to_meters,
@@ -53,10 +47,8 @@ from depth.MiDaS_monocular import (
     midas_to_pseudo_depth,
 )
 from pose_estimation.PnP import run_pnp_for_frame
-from tests.reprojection_err import reprojection_error
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
-#   TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
 RGB_DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset"
 RGB_TXT = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb.txt"
 DEPTH_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "depth"

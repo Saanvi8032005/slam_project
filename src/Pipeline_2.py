@@ -1,8 +1,3 @@
-"""
-pipeline.py
-
-"""
-
 from pathlib import Path
 import numpy as np
 import sys
@@ -34,7 +29,6 @@ from keyframe_selection.keyframe_helpers import (
     insert_keyframe_if_needed,
     kps_to_xy,
 )
-from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
 from utils.trajectory_utils import save_estimated_trajectory
 from pose_estimation.PnP import run_pnp_for_frame
 from tests.reprojection_err import reprojection_error
@@ -793,9 +787,7 @@ if __name__ == "__main__":
             if kf_j_id % 5 == 0:
                 cull_weak_mappoints(slam_map, min_observations=2)
             last_kf_id = kf_j_id
-
-    # changed nothing 
-    optimise_pose_graph(slam_map, max_nfev=50, robust=True, verbose=2) 
+ 
     print_map(slam_map)
 
     if True:

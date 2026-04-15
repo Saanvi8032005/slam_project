@@ -1,16 +1,7 @@
-"""
-pipeline.py
-
-Third script to run the individual stages in order:
-1) Tracking / matching  (combined.py)
-2) Pose estimation      (pose_estimation.py)
-"""
-
 from pathlib import Path
 import numpy as np
 import sys
 import matplotlib.pyplot as plt
-import cv2 as cv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -18,8 +9,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from tracking.tracking import matching
-from tests.reprojection_err import reprojection_error
-#   from tracking.lsd_tracking import lsd
 from pose_estimation.pose_estimation import pose_estimate
 from triangulation.triangulation import triangulate_from_data
 from visualising.visualising import visualize_points
@@ -31,17 +20,14 @@ from tests.pose_estimation_eval import (
         translation_direction_error_deg,
         GT_PATH,
     )
-from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
+from keyframe_selection.keyframe_selec import Map, print_map,
 from keyframe_selection.keyframe_helpers import (
     initialize_map,  # Fixed function name
     add_map_edge,
 )
-from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
 from utils.trajectory_utils import save_estimated_trajectory
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "rgb"
-#   DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_debugging_xyz"
-#   TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
 RBG_DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_room"
 RGB_TXT = PROJECT_ROOT / "data" / "rgbd_dataset_room" / "rgb.txt"
 

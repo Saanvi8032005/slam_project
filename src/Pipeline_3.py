@@ -32,13 +32,6 @@ from tests.pose_estimation_eval import (
         translation_direction_error_deg,
         GT_PATH,
     )
-from keyframe_selection.keyframe_selec import Map, Edge, print_map, Keyframe
-from keyframe_selection.keyframe_helpers import (
-    initialize_map,  # Fixed function name
-    add_map_edge,
-)
-from pose_graph_optimization.pose_graph_optimization import optimise_pose_graph
-from utils.trajectory_utils import save_estimated_trajectory
 from utils.util import (
     depth_to_meters,
     stage_pose_rgbd,
@@ -52,7 +45,6 @@ from depth.MiDaS_monocular import (
 from tests.reprojection_err import reprojection_error
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_large" / "rgb"
-#   TEMP_DIR = PROJECT_ROOT / "outputs" / "temp"
 RGB_DATA_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_large"
 RGB_TXT = PROJECT_ROOT / "data" / "rgbd_dataset_large" / "rgb.txt"
 DEPTH_DIR = PROJECT_ROOT / "data" / "rgbd_dataset_large" / "depth"
