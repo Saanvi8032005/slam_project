@@ -251,7 +251,7 @@ def run_pnp_for_frame(
         kp_idx = match_kp_idxs[idx]
         mp_id = match_mp_ids[idx]
         inlier_kp_to_mp[int(kp_idx)] = int(mp_id)
-
+    
     reproj_error = reprojection_error(
         object_points[inliers],
         image_points[inliers],

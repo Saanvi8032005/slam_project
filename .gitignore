@@ -10,5 +10,4 @@ report_results/*
 !report_results/pipeline1/debugging/ate_traj.png
 
 open3d_env/
-gifs/frames/
-1.blend1
+
