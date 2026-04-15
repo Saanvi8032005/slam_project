@@ -31,7 +31,6 @@ from keyframe_selection.keyframe_helpers import (
 )
 from utils.trajectory_utils import save_estimated_trajectory
 from pose_estimation.PnP import run_pnp_for_frame
-from tests.reprojection_err import reprojection_error
 
 DATA_DIR = PROJECT_ROOT / "data" / "rgb_dataset" / "rgb"
 estimated_trajectory_file = PROJECT_ROOT / "report_results" / "pipeline2" / "desk1" / "tests.txt"
@@ -192,18 +191,6 @@ def stage_triangulate(tracking_entry, pose_entry, points_store=None):
     return points_store[pair_id]
 
 
-def stage_align_pc(pose_results, points_results):
-    print("\n=== STAGE 4: ALIGNING POINT CLOUDS ===")
-
-    global_points = align_point_clouds(
-        pose_results,
-        points_results,
-        output_name="global_points.npy",
-        save=False,
-    )
-    return global_points
-
-
 def stage_visualise(points_file):
     print("\n=== STAGE 5: VISUALISATION ===")
     visualize_points(points_file=str(points_file))
@@ -214,23 +201,6 @@ def is_good_keyframe(num_inliers, inlier_ratio, reproj_mean):
     if inlier_ratio < 0.4: return False
     if reproj_mean > 1.5: return False
     return True
-
-
-def save_global_points(global_points):
-    if global_points is None or global_points.size == 0:
-        print("[PIPE] No global points to save.")
-        print("\n[PIPE] Done processing all image pairs.")
-    else:
-        # Remove infinities / NaNs
-        mask = np.isfinite(global_points).all(axis=1)
-        pts = global_points[mask]
-
-        # Option 1: save in project root
-        # np.savetxt("global_points.xyz", pts)
-
-        # Option 2 (nicer): save into outputs/aligning_pc
-        out_path = PROJECT_ROOT / "outputs" / "aligning_pc" / "post_pnp_cloud.xyz"
-        np.savetxt(out_path, pts)
 
 
 def print_stats(name, arr, want_min=True):
@@ -269,42 +239,6 @@ def histogram(rot_err_arr):
     # Print catastrophic failures
     num_big = np.sum(rot_err_arr >= 10)
     print(f"Number of catastrophic failures (≥10°): {num_big}")
-
-
-def geometric_filter_matches(kf_i, kf_j, matches, K):
-    """
-    Use Essential matrix RANSAC to keep only geometrically consistent matches.
-
-    Returns:
-        pts1_inl, pts2_inl, idx_i_inl, idx_j_inl
-    """
-    if len(matches) < 8:
-        return None, None, None, None
-
-    idx_i = np.array([m.queryIdx for m in matches], dtype=int)
-    idx_j = np.array([m.trainIdx for m in matches], dtype=int)
-
-    pts1 = np.array([kf_i.keypoints_xy[q] for q in idx_i], dtype=np.float32)
-    pts2 = np.array([kf_j.keypoints_xy[t] for t in idx_j], dtype=np.float32)
-
-    E, maskE = cv.findEssentialMat(
-        pts1, pts2, K,
-        method=cv.RANSAC,
-        prob=0.999,
-        threshold=1.0
-    )
-
-    if E is None or maskE is None:
-        return None, None, None, None
-
-    maskE = maskE.ravel().astype(bool)
-
-    pts1_inl = pts1[maskE]
-    pts2_inl = pts2[maskE]
-    idx_i_inl = idx_i[maskE]
-    idx_j_inl = idx_j[maskE]
-
-    return pts1_inl, pts2_inl, idx_i_inl, idx_j_inl
 
 
 def filter_new_feature_matches(kf_i, kf_j, matches):
@@ -752,27 +686,6 @@ if __name__ == "__main__":
             dir_err_pnp = translation_direction_error_deg(t_rel, t_gt)
             rot_errors_pnp.append(rot_err_pnp)
             trans_dir_errors_pnp.append(dir_err_pnp)
-
-            """
-            print("last_kf_id:", last_kf_id, "kf_j_id:", kf_j_id)
-            print("last frame:", slam_map.keyframes[last_kf_id].frame_id)
-            print("cur frame:", slam_map.keyframes[kf_j_id].frame_id)
-            print("loop i:", i)
-
-            print("t_rel:", t_rel)
-            print("||t_rel||:", np.linalg.norm(t_rel))
-            print("t_gt:", t_gt)
-            print("||t_gt||:", np.linalg.norm(t_gt))
-
-            print("dir err:", translation_direction_error_deg(t_rel, t_gt))
-            print("dir err flipped:", translation_direction_error_deg(t_rel, -t_gt))
-
-            #   debugging
-            print(f"[PIPE] KF{last_kf_id} -> KF{kf_j_id}")
-            print("det(R_rel):", np.linalg.det(R_rel))
-            print("t_rel:", t_rel)
-            print("t_rel norm:", np.linalg.norm(t_rel))
-            """
 
             created = triangulate_new_features_between_keyframes(
                 slam_map=slam_map,

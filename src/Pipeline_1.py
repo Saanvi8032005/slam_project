@@ -403,7 +403,6 @@ if __name__ == "__main__":
     print(tracking_acceptance, "keyframes accepted out of", len(tracking_results))
 
     #   print_map(slam_map)
-    optimise_pose_graph(slam_map, max_nfev=50, robust=True, verbose=2)  # Set verbosity level
     print_map(slam_map)
 
     global_points = stage_align_pc(pose_results, points_results)
